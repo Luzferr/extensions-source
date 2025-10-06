@@ -254,14 +254,31 @@ class Gnula :
         players.array("spanish").collectHosters("[CAST]", groupedHosters)
         players.array("english").collectHosters("[SUB]", groupedHosters)
 
-        return groupedHosters.map { (key, videos) ->
-            val (languageTag, serverDisplay) = key
-            val sortedVideos = videos.sortVideos()
-            Hoster(
-                hosterName = "$languageTag $serverDisplay",
-                videoList = sortedVideos,
-            )
-        }
+        val preferredLang = preferences.getString(PREF_LANGUAGE_KEY, PREF_LANGUAGE_DEFAULT) ?: PREF_LANGUAGE_DEFAULT
+        val preferredServer = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT) ?: PREF_SERVER_DEFAULT
+
+        val hosterGroups =
+            groupedHosters.entries.mapIndexed { index, (key, videos) ->
+                val (languageTag, serverDisplay) = key
+                val sortedVideos = videos.sortVideos()
+                HosterGroupMeta(
+                    index = index,
+                    languageTag = languageTag,
+                    serverDisplay = serverDisplay,
+                    hoster =
+                        Hoster(
+                            hosterName = "$languageTag $serverDisplay",
+                            videoList = sortedVideos,
+                        ),
+                )
+            }
+
+        return hosterGroups
+            .sortedWith(
+                compareByDescending<HosterGroupMeta> { it.matchesLanguage(preferredLang) }
+                    .thenByDescending { it.matchesServer(preferredServer) }
+                    .thenBy { it.index },
+            ).map { it.hoster }
     }
 
     // --------------------------------Video extractors------------------------------------
@@ -291,17 +308,20 @@ class Gnula :
         return runCatching {
             val source = serverName?.ifEmpty { url } ?: url
             val matched = canonicalServerSlug(source)
+            val displayServer = displayServerName(matched)
+            val prefixBase = buildPrefix(prefix, displayServer)
+            val prefixWithSpace = prefixBase.withTrailingSpace()
             when (matched) {
                 "voe" -> {
-                    voeExtractor.videosFromUrl(url, "$prefix ")
+                    voeExtractor.videosFromUrl(url, prefixWithSpace)
                 }
 
                 "okru" -> {
-                    okruExtractor.videosFromUrl(url, prefix)
+                    okruExtractor.videosFromUrl(url, prefixWithSpace)
                 }
 
                 "filemoon" -> {
-                    filemoonExtractor.videosFromUrl(url, prefix = "$prefix Filemoon:")
+                    filemoonExtractor.videosFromUrl(url, prefix = prefixWithSpace)
                 }
 
                 "amazon" -> {
@@ -335,66 +355,66 @@ class Gnula :
                                     "\"FOLDER\":",
                                 ).substringAfter("tempLink\":\"")
                                 .substringBefore("\"")
-                        listOf(Video(videoUrl = videoUrl, videoTitle = "$prefix Amazon"))
+                        listOf(Video(videoUrl = videoUrl, videoTitle = buildVideoName(prefixBase, "Amazon")))
                     } else {
                         emptyList()
                     }
                 }
 
                 "uqload" -> {
-                    uqloadExtractor.videosFromUrl(url, prefix)
+                    uqloadExtractor.videosFromUrl(url, prefixWithSpace)
                 }
 
                 "mp4upload" -> {
-                    mp4uploadExtractor.videosFromUrl(url, headers, prefix = "$prefix ")
+                    mp4uploadExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
                 }
 
                 "streamwish" -> {
-                    streamWishExtractor.videosFromUrl(url, videoNameGen = { "$prefix StreamWish:$it" })
+                    streamWishExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
                 }
 
                 "doodstream" -> {
-                    doodExtractor.videosFromUrl(url, "$prefix DoodStream")
+                    doodExtractor.videosFromUrl(url, prefixWithSpace)
                 }
 
                 "streamlare" -> {
-                    streamlareExtractor.videosFromUrl(url, prefix)
+                    streamlareExtractor.videosFromUrl(url, prefixWithSpace)
                 }
 
                 "yourupload" -> {
-                    yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = "$prefix ")
+                    yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = prefixWithSpace)
                 }
 
                 "burstcloud" -> {
-                    burstCloudExtractor.videoFromUrl(url, headers = headers, prefix = "$prefix ")
+                    burstCloudExtractor.videoFromUrl(url, headers = headers, prefix = prefixWithSpace)
                 }
 
                 "fastream" -> {
-                    fastreamExtractor.videosFromUrl(url, prefix = "$prefix Fastream:")
+                    fastreamExtractor.videosFromUrl(url, prefix = prefixWithSpace)
                 }
 
                 "upstream" -> {
-                    upstreamExtractor.videosFromUrl(url, prefix = "$prefix ")
+                    upstreamExtractor.videosFromUrl(url, prefix = prefixWithSpace)
                 }
 
                 "streamsilk" -> {
-                    streamSilkExtractor.videosFromUrl(url, videoNameGen = { "$prefix StreamSilk:$it" })
+                    streamSilkExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
                 }
 
                 "streamtape" -> {
-                    streamTapeExtractor.videosFromUrl(url, quality = "$prefix StreamTape")
+                    streamTapeExtractor.videosFromUrl(url, quality = prefixBase)
                 }
 
                 "vidhide" -> {
-                    vidHideExtractor.videosFromUrl(url, videoNameGen = { "$prefix VidHide:$it" })
+                    vidHideExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
                 }
 
                 "vidguard" -> {
-                    vidGuardExtractor.videosFromUrl(url, prefix = "$prefix ")
+                    vidGuardExtractor.videosFromUrl(url, prefix = prefixWithSpace)
                 }
 
                 else -> {
-                    universalExtractor.videosFromUrl(url, headers, prefix = "$prefix ")
+                    universalExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
                 }
             }
         }.getOrNull() ?: emptyList()
@@ -592,6 +612,17 @@ class Gnula :
         val videos: List<Video>,
     )
 
+    private data class HosterGroupMeta(
+        val index: Int,
+        val languageTag: String,
+        val serverDisplay: String,
+        val hoster: Hoster,
+    ) {
+        fun matchesLanguage(preferred: String): Int = if (languageTag == preferred) 1 else 0
+
+        fun matchesServer(preferred: String): Int = if (serverDisplay.equals(preferred, ignoreCase = true)) 1 else 0
+    }
+
     private fun displayServerName(serverSlug: String): String {
         val canonical = canonicalServerSlug(serverSlug)
         if (canonical.isBlank()) return "Unknown"
@@ -681,6 +712,27 @@ class Gnula :
             replace("/original/", "/w400/")
         } else {
             this
+        }
+
+    private fun buildPrefix(
+        languageTag: String,
+        serverName: String,
+    ): String =
+        sequenceOf(languageTag, serverName)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(" ")
+
+    private fun String.withTrailingSpace(): String = if (isBlank()) "" else "$this "
+
+    private fun buildVideoName(
+        prefix: String,
+        detail: String,
+    ): String =
+        when {
+            prefix.isBlank() -> detail.trim()
+            detail.isBlank() -> prefix.trim()
+            else -> "$prefix ${detail.trim()}"
         }
 
     private fun JsonElement?.jsonObjectOrNull(): JsonObject? = this as? JsonObject
