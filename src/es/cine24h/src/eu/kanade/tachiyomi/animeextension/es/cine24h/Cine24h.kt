@@ -206,20 +206,23 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
     }
 
     private fun parseSeriesEpisodes(document: Document): List<SEpisode> {
-        val structuredEpisodes = parseStructuredSeasons(document)
+        val variantOffsets = mutableMapOf<Pair<Int, Int>, MutableMap<String, Int>>()
+        val structuredEpisodes = parseStructuredSeasons(document, variantOffsets)
         if (structuredEpisodes.isNotEmpty()) return structuredEpisodes
 
-        val fallbackEpisodes = parseEpisodeAnchorsFallback(document)
+        val fallbackEpisodes = parseEpisodeAnchorsFallback(document, variantOffsets)
         if (fallbackEpisodes.isNotEmpty()) return fallbackEpisodes
 
         return listOf(createMovieEpisode(document))
     }
 
-    private fun parseStructuredSeasons(document: Document): List<SEpisode> {
+    private fun parseStructuredSeasons(
+        document: Document,
+        variantOffsets: MutableMap<Pair<Int, Int>, MutableMap<String, Int>>,
+    ): List<SEpisode> {
         val seasonBlocks = document.select("#seasons .se-c, #seasons > div")
         if (seasonBlocks.isEmpty()) return emptyList()
 
-        val seenUrls = mutableSetOf<String>()
         val episodes = seasonBlocks.flatMap { seasonBlock ->
             val seasonLabel = seasonBlock.selectFirst(".se-t")?.text()?.trim()
             val defaultSeason = seasonLabelRegex.find(seasonLabel.orEmpty())?.value?.toIntOrNull()
@@ -229,7 +232,6 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
                 .mapIndexedNotNull { index, element ->
                     val anchor = element.selectFirst("a[href]") ?: return@mapIndexedNotNull null
                     val href = anchor.attr("abs:href")
-                    if (!seenUrls.add(href)) return@mapIndexedNotNull null
 
                     val numerando = element.selectFirst(".numerando")?.text()
                     val titleText = anchor.ownText().ifBlank { anchor.text() }.trim()
@@ -240,12 +242,22 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
                     val resolvedSeason = seasonNumber ?: defaultSeason ?: 1
                     val resolvedEpisode = episodeNumber ?: index + 1
 
-                    val displayName = buildEpisodeName(resolvedSeason, resolvedEpisode, titleText)
+                    val languageTag = buildLanguageTag(element)
+                    val languageKey =
+                        languageTag?.lowercase()?.replace("[^a-z0-9]+".toRegex(), "")?.ifBlank { null }
+                    val offsetsForEpisode = variantOffsets.getOrPut(resolvedSeason to resolvedEpisode) { mutableMapOf() }
+                    val variantIndex = offsetsForEpisode.getOrPut(languageKey ?: "variant") { offsetsForEpisode.size }
+                    val displayName = buildEpisodeName(resolvedSeason, resolvedEpisode, titleText, languageTag)
+
+                    val uniqueUrl = buildVariantUrl(href, languageKey ?: "variant", variantIndex)
+
+                    val baseNumber = ((resolvedSeason.coerceAtLeast(0) * 100) + resolvedEpisode).toFloat()
 
                     SEpisode.create().apply {
-                        setUrlWithoutDomain(href)
+                        setUrlWithoutDomain(uniqueUrl)
                         name = displayName
-                        episode_number = ((resolvedSeason.coerceAtLeast(0) * 100) + resolvedEpisode).toFloat()
+                        scanlator = languageTag
+                        episode_number = baseNumber + (variantIndex * 0.01f)
                     }
                 }
         }
@@ -262,11 +274,13 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
         }
     }
 
-    private fun parseEpisodeAnchorsFallback(document: Document): List<SEpisode> {
+    private fun parseEpisodeAnchorsFallback(
+        document: Document,
+        variantOffsets: MutableMap<Pair<Int, Int>, MutableMap<String, Int>>,
+    ): List<SEpisode> {
         val episodeAnchors = document.select("a[href*=\"/episode/\"]")
             .toList()
             .filter { it.text().isNotBlank() }
-            .distinctBy { it.attr("abs:href") }
 
         if (episodeAnchors.isEmpty()) return emptyList()
 
@@ -284,24 +298,52 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
             val resolvedSeason = seasonNumber ?: 0
             val resolvedEpisode = episodeNumber ?: (index + 1)
 
+            val languageTag = buildLanguageTag(anchor)
+            val languageKey = languageTag?.lowercase()?.replace("[^a-z0-9]+".toRegex(), "")?.ifBlank { null }
             val displayName = if (seasonNumber != null && episodeNumber != null) {
-                buildEpisodeName(resolvedSeason, resolvedEpisode, rawName)
+                buildEpisodeName(resolvedSeason, resolvedEpisode, rawName, languageTag)
             } else {
                 baseName
             }
 
+            val keySeason = if (seasonNumber != null) resolvedSeason else -1
+            val keyEpisode = if (episodeNumber != null) resolvedEpisode else index + 1
+            val offsetsForEpisode = variantOffsets.getOrPut(keySeason to keyEpisode) { mutableMapOf() }
+            val variantIndex = offsetsForEpisode.getOrPut(languageKey ?: "variant") { offsetsForEpisode.size }
+
+            val uniqueUrl = buildVariantUrl(href, languageKey ?: "variant", variantIndex)
+            val baseNumber = if (seasonNumber != null && episodeNumber != null) {
+                ((resolvedSeason * 100) + resolvedEpisode).toFloat()
+            } else {
+                (index + 1).toFloat()
+            }
+
             SEpisode.create().apply {
-                setUrlWithoutDomain(href)
+                setUrlWithoutDomain(uniqueUrl)
                 name = displayName
-                episode_number = if (seasonNumber != null && episodeNumber != null) {
-                    (resolvedSeason * 100 + resolvedEpisode).toFloat()
-                } else {
-                    (index + 1).toFloat()
-                }
+                scanlator = languageTag
+                episode_number = baseNumber + (variantIndex * 0.01f)
             }
         }
 
         return episodes.sortedByDescending { it.episode_number }
+    }
+
+    private fun buildLanguageTag(element: Element): String? {
+        val flagTitle = element.selectFirst("img[alt], img[title]")?.let { img ->
+            sequenceOf(img.attr("alt"), img.attr("title"))
+                .firstOrNull { it.isNotBlank() }
+        }
+
+        val badgeText = element.selectFirst(".flag, .server, span")?.text()?.lowercase().orEmpty()
+        val raw = flagTitle?.lowercase().orEmpty() + badgeText
+
+        return when {
+            "lat" in raw || "latino" in raw -> "LAT"
+            "cast" in raw || "esp" in raw || "españ" in raw || "castell" in raw -> "CAST"
+            "sub" in raw || "ing" in raw || "eng" in raw -> "SUB"
+            else -> null
+        }
     }
 
     private fun findSeasonEpisode(vararg sources: String?): Pair<Int?, Int?>? {
@@ -324,10 +366,24 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
         return null
     }
 
-    private fun buildEpisodeName(seasonNumber: Int, episodeNumber: Int, titleText: String): String {
+    private fun buildEpisodeName(seasonNumber: Int, episodeNumber: Int, titleText: String, languageTag: String?): String {
         val base = "T$seasonNumber - E$episodeNumber"
         val cleanTitle = titleText.trim().takeIf { it.isNotBlank() && !it.startsWith(base) }
-        return cleanTitle?.let { "$base - $it" } ?: base
+        val name = cleanTitle?.let { "$base - $it" } ?: base
+        return languageTag?.let { "$name [$it]" } ?: name
+    }
+
+    private fun buildVariantUrl(href: String, variantKey: String, variantIndex: Int): String {
+        val suffix = buildString {
+            append(variantKey.ifBlank { "variant" })
+            if (variantIndex > 0) append(variantIndex)
+        }
+
+        return if (href.contains('#')) {
+            "$href-$suffix"
+        } else {
+            "$href#$suffix"
+        }
     }
 
     override fun videoListParse(response: Response): List<Video> {
