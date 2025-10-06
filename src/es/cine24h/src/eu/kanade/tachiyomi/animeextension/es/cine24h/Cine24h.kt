@@ -29,6 +29,7 @@ import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import org.jsoup.nodes.Entities
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
@@ -246,66 +247,89 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
     override fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         val referer = response.request.url.toString()
+        val collectedUrls = collectPlayerUrls(document, referer)
+        if (collectedUrls.isEmpty()) return emptyList()
 
-        val playerOptions = document.select("ul#playeroptionsul li, ul.optnslst li[data-option], ul.optnslst li[data-src]")
-        if (playerOptions.isNotEmpty()) {
-            val uniqueOptions = playerOptions
-                .mapNotNull { option ->
-                    val url = option.extractPlayerUrl(referer)
-                    if (url.isBlank()) null else url
-                }
-                .distinct()
+        return collectedUrls
+            .distinct()
+            .parallelCatchingFlatMapBlocking(::serverVideoResolver)
+    }
 
-            if (uniqueOptions.isNotEmpty()) {
-                return uniqueOptions.parallelCatchingFlatMapBlocking(::serverVideoResolver)
+    // Collect all playable URLs from the page, prioritising explicit player options.
+    private fun collectPlayerUrls(document: Document, referer: String): List<String> {
+        val primaryUrls = document.select(playerOptionSelector)
+            .mapNotNull { option ->
+                option.extractPlayerUrl(referer).takeIf { it.isNotBlank() }
             }
+
+        if (primaryUrls.isNotEmpty()) return primaryUrls
+
+        return document.select(fallbackPlayerSelector)
+            .flatMap { container ->
+                val html = Entities.unescape(container.html())
+                val inlineCandidates = collectEmbedUrls(html)
+                inlineCandidates.ifEmpty {
+                    Jsoup.parse(html)
+                        .selectFirst("iframe[src], iframe[data-src], iframe[data-lazy-src]")
+                        ?.firstAvailableAttribute(embedSrcAttributes)
+                        ?.let(::normalizePlayerUrl)
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { listOf(it) }
+                        ?: emptyList()
+                }
+            }
+    }
+
+    private fun collectEmbedUrls(html: String): List<String> = Jsoup.parse(html).collectEmbedUrls()
+
+    // Normalises and filters every URL hidden inside players, iframes, attributes or raw text.
+    private fun Document.collectEmbedUrls(): List<String> {
+        val candidates = mutableSetOf<String>()
+
+        select("iframe[src], iframe[data-src], iframe[data-lazy-src]")
+            .mapNotNull { it.firstAvailableAttribute(embedSrcAttributes) }
+            .map(::normalizePlayerUrl)
+            .filter { it.isNotBlank() && isSupportedHost(it) }
+            .forEach(candidates::add)
+
+        select("source[src], video[src]")
+            .mapNotNull {
+                it.attr("abs:src").takeIf(String::isNotBlank) ?: it.attr("src")
+            }
+            .map(::normalizePlayerUrl)
+            .filter { it.isNotBlank() && isSupportedHost(it) }
+            .forEach(candidates::add)
+
+        playerDataAttributes.forEach { attr ->
+            select("[$attr]")
+                .mapNotNull { element -> element.attr(attr).takeIf(String::isNotBlank) }
+                .map(::normalizePlayerUrl)
+                .filter { it.isNotBlank() && isSupportedHost(it) }
+                .forEach(candidates::add)
         }
 
-        return document.select(".TPlayerTb").parallelCatchingFlatMapBlocking { container ->
-            val html = org.jsoup.nodes.Entities.unescape(container.html())
-            val primaryCandidates = extractEmbedCandidates(html)
-            if (primaryCandidates.isNotEmpty()) {
-                return@parallelCatchingFlatMapBlocking primaryCandidates.flatMap(::serverVideoResolver)
-            }
+        urlRegex.findAll(outerHtml())
+            .map { it.value }
+            .map(::normalizePlayerUrl)
+            .filter { it.isNotBlank() && isSupportedHost(it) }
+            .forEach(candidates::add)
 
-            val fallbackUrl = Jsoup.parse(html).selectFirst("iframe")?.let { iframe ->
-                iframe.absUrl("src").ifBlank { iframe.attr("src") }
-            }?.replace("&#038;", "&") ?: ""
+        return candidates.toList()
+    }
 
-            if (fallbackUrl.isBlank()) return@parallelCatchingFlatMapBlocking emptyList()
-
-            val embedHeaders = headers.newBuilder()
-                .add("Referer", referer)
-                .add("Origin", baseUrl)
-                .build()
-
-            val embedBody = runCatching {
-                client.newCall(GET(fallbackUrl, embedHeaders)).execute().use { response ->
-                    if (!response.isSuccessful) "" else response.body?.string().orEmpty()
-                }
-            }.getOrDefault("")
-
-            if (embedBody.isBlank()) return@parallelCatchingFlatMapBlocking emptyList()
-
-            val embeddedCandidates = extractEmbedCandidates(embedBody)
-            embeddedCandidates.flatMap(::serverVideoResolver)
+    private fun Element.firstAvailableAttribute(attributes: Array<String>): String? {
+        return attributes.firstNotNullOfOrNull { attrName ->
+            attr(attrName).takeIf { it.isNotBlank() }
         }
     }
 
     private fun Element.extractPlayerUrl(referer: String): String {
-        val directCandidate = sequenceOf<String?>(
-            attr("data-option"),
-            attr("data-player"),
-            attr("data-src"),
-            attr("data-video"),
-            attr("data-url"),
-            attr("data-link"),
-            attr("href"),
-            selectFirst("a[href]")?.attr("href"),
-        ).firstOrNull { !it.isNullOrBlank() }
+        val directCandidate = playerDirectAttributes
+            .firstNotNullOfOrNull { attribute -> attr(attribute).takeIf { it.isNotBlank() } }
+            ?: selectFirst("a[href]")?.attr("href")
 
-        directCandidate?.let {
-            return normalizePlayerUrl(org.jsoup.nodes.Entities.unescape(it))
+        if (!directCandidate.isNullOrBlank()) {
+            return normalizePlayerUrl(Entities.unescape(directCandidate))
         }
 
         val post = attr("data-post")
@@ -330,26 +354,26 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
         val ajaxTypeQuery = type.ifBlank { "movie" }
         val ajaxUrl = "$baseUrl/wp-admin/admin-ajax.php?action=doo_player_ajax&post=$post&nume=$nume&type=$ajaxTypeQuery"
 
-        val primaryBody = client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", ajaxHeaders, formBody)).execute().use { it.body?.string().orEmpty() }
+        val primaryBody = client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", ajaxHeaders, formBody)).execute().use { it.body.string() }
         val body = if (primaryBody.isNotBlank() && !primaryBody.contains("error", ignoreCase = true)) {
             primaryBody
         } else {
-            client.newCall(GET(ajaxUrl, ajaxHeaders)).execute().use { it.body?.string().orEmpty() }
+            client.newCall(GET(ajaxUrl, ajaxHeaders)).execute().use { it.body.string() }
         }
         if (body.isBlank()) return ""
 
         val embedFromJson = embedUrlRegex.find(body)?.groupValues?.getOrNull(1)
             ?.replace("\\/", "/")
-            ?.let(org.jsoup.nodes.Entities::unescape)
+            ?.let(Entities::unescape)
             ?.takeIf { it.isNotBlank() }
         if (embedFromJson != null) return normalizePlayerUrl(embedFromJson)
 
         val ajaxDocument = Jsoup.parse(body)
         val iframe = ajaxDocument.selectFirst("iframe")?.attr("src")
-        if (!iframe.isNullOrBlank()) return normalizePlayerUrl(org.jsoup.nodes.Entities.unescape(iframe))
+        if (!iframe.isNullOrBlank()) return normalizePlayerUrl(Entities.unescape(iframe))
 
         val source = ajaxDocument.selectFirst("source")?.attr("src")
-        if (!source.isNullOrBlank()) return normalizePlayerUrl(org.jsoup.nodes.Entities.unescape(source))
+        if (!source.isNullOrBlank()) return normalizePlayerUrl(Entities.unescape(source))
 
         return ""
     }
@@ -358,7 +382,7 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
         if (url.isBlank()) return ""
 
         val decoded = decodeIfBase64(url)
-        val cleaned = org.jsoup.nodes.Entities.unescape(decoded).trim()
+        val cleaned = Entities.unescape(decoded).trim()
         if (cleaned.isBlank()) return ""
 
         val resolved = when {
@@ -370,50 +394,13 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
         return resolved.replace("&amp;", "&")
     }
 
-    private fun extractEmbedCandidates(html: String): Set<String> {
-        if (html.isBlank()) return emptySet()
-
-        val doc = Jsoup.parse(html)
-        val candidates = mutableSetOf<String>()
-
-        doc.select("iframe[src], iframe[data-src], iframe[data-lazy-src]")
-            .map { element ->
-                sequenceOf("src", "data-src", "data-lazy-src")
-                    .map(element::attr)
-                    .firstOrNull { it.isNotBlank() }
-                    .orEmpty()
-            }
-            .map(::normalizePlayerUrl)
-            .filter { it.isNotBlank() && isSupportedHost(it) }
-            .forEach(candidates::add)
-
-        doc.select("source[src], video[src]")
-            .map { it.attr("abs:src").ifBlank { it.attr("src") } }
-            .map(::normalizePlayerUrl)
-            .filter { it.isNotBlank() && isSupportedHost(it) }
-            .forEach(candidates::add)
-
-        val dataAttributes = listOf("data-src", "data-url", "data-video", "data-link", "data-player")
-        dataAttributes.forEach { attr ->
-            doc.select("[$attr]")
-                .map { it.attr(attr) }
-                .map(::normalizePlayerUrl)
-                .filter { it.isNotBlank() && isSupportedHost(it) }
-                .forEach(candidates::add)
-        }
-
-        val text = doc.outerHtml()
-        urlRegex.findAll(text)
-            .map { it.value }
-            .map(::normalizePlayerUrl)
-            .filter { it.isNotBlank() && isSupportedHost(it) }
-            .forEach(candidates::add)
-
-        return candidates
-    }
-
     private val embedUrlRegex = Regex("\\\"embed_url\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"")
     private val urlRegex = Regex("https?://[^\\s'\"]+")
+    private val playerOptionSelector = "ul#playeroptionsul li, ul.optnslst li[data-option], ul.optnslst li[data-src]"
+    private val fallbackPlayerSelector = ".TPlayerTb"
+    private val playerDirectAttributes = arrayOf("data-option", "data-player", "data-src", "data-video", "data-url", "data-link", "href")
+    private val playerDataAttributes = arrayOf("data-src", "data-url", "data-video", "data-link", "data-player")
+    private val embedSrcAttributes = arrayOf("src", "data-src", "data-lazy-src")
     private val hostHints = listOf(
         "voe",
         "fastream",
@@ -485,39 +472,17 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
 
             val embedBody = runCatching {
                 client.newCall(GET(resolvedUrl, embedHeaders)).execute().use { response ->
-                    if (!response.isSuccessful) "" else response.body?.string().orEmpty()
+                    if (!response.isSuccessful) "" else response.body.string()
                 }
             }.getOrDefault("")
 
             if (embedBody.isBlank()) return emptyList()
 
-            val embedDocument = Jsoup.parse(embedBody)
-
-            val dataAttributes = listOf("data-src", "data-url", "data-video", "data-link", "data-player")
-            val attributeCandidates = dataAttributes.flatMap { attr ->
-                embedDocument.select("[$attr]")
-                    .map { element -> normalizePlayerUrl(element.attr(attr)) }
-            }
-
-            val candidates = (attributeCandidates + extractEmbedCandidates(embedBody))
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
+            val candidates = Jsoup.parse(embedBody)
+                .collectEmbedUrls()
                 .filterNot { it.equals(resolvedUrl, ignoreCase = true) }
-                .toSet()
 
-            if (candidates.isEmpty()) {
-                val iframeFallback = Jsoup.parse(embedBody)
-                    .selectFirst("iframe[src], iframe[data-src], iframe[data-lazy-src]")
-                    ?.let { element ->
-                        sequenceOf("src", "data-src", "data-lazy-src")
-                            .map(element::attr)
-                            .firstOrNull { it.isNotBlank() }
-                    }
-                    ?.let(::normalizePlayerUrl)
-                    ?.takeIf { it.isNotBlank() }
-
-                return iframeFallback?.let { serverVideoResolver(it, depth + 1) } ?: emptyList()
-            }
+            if (candidates.isEmpty()) return emptyList()
 
             return candidates.flatMap { candidate -> serverVideoResolver(candidate, depth + 1) }
         }
@@ -535,7 +500,7 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
             arrayOf("filemoon", "moonplayer", "moonwatch").any(resolvedUrl) -> filemoonExtractor.videosFromUrl(resolvedUrl, prefix = "Filemoon:", headers = headers)
             arrayOf("doodstream", "dood.", "ds2play", "doods.").any(resolvedUrl) -> doodExtractor.videosFromUrl(resolvedUrl, "")
             arrayOf("voe", "jilliandescribecompany").any(resolvedUrl) -> voeExtractor.videosFromUrl(resolvedUrl)
-            arrayOf("vembed", "guard", "listeamed", "bembed", "vgfplay","vidGuard").any(resolvedUrl) -> vidGuardExtractor.videosFromUrl(resolvedUrl, prefix = "")
+            arrayOf("vembed", "guard", "listeamed", "bembed", "vgfplay", "vidGuard").any(resolvedUrl) -> vidGuardExtractor.videosFromUrl(resolvedUrl, prefix = "")
             else -> emptyList()
         }
     }
