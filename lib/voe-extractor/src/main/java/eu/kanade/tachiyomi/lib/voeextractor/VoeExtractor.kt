@@ -48,7 +48,9 @@ class VoeExtractor(private val client: OkHttpClient, private val headers: Header
         }
         if (mp4 != null) {
             videoList.add(
-                Video(mp4, "${prefix}Voe:MP4", mp4)
+                Video(videoTitle = "${prefix}Voe:MP4", videoUrl = mp4,
+                    subtitleTracks = emptyList(), audioTracks = emptyList()
+                )
             )
         }
 

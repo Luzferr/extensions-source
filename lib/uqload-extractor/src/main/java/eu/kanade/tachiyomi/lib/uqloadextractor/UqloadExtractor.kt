@@ -20,6 +20,6 @@ class UqloadExtractor(private val client: OkHttpClient) {
         val videoHeaders = Headers.headersOf("Referer", "https://uqload.ws/")
         val quality = if (prefix.isNotBlank()) "$prefix Uqload" else "Uqload"
 
-        return listOf(Video(videoUrl, quality, videoUrl, videoHeaders))
+        return listOf(Video(videoTitle = quality, videoUrl = videoUrl, headers = videoHeaders, subtitleTracks = emptyList(), audioTracks = emptyList()))
     }
 }

@@ -98,7 +98,7 @@ class UniversalExtractor(private val client: OkHttpClient) {
             }
             "mp4" in resultUrl -> {
                 Log.d("UniversalExtractor", "mp4 URL: $resultUrl")
-                Video(resultUrl, "$prefix - $host: ${customQuality ?: "Mirror"}", resultUrl, origRequestHeader.newBuilder().add("referer", origRequestUrl).build()).let(::listOf)
+                Video(videoTitle = "$prefix - $host: ${customQuality ?: "Mirror"}", videoUrl = resultUrl, headers = origRequestHeader.newBuilder().add("referer", origRequestUrl).build(), subtitleTracks = emptyList(), audioTracks = emptyList()).let(::listOf)
             }
             else -> emptyList()
         }

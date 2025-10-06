@@ -70,7 +70,9 @@ class OkruExtractor(private val client: OkHttpClient) {
             val videoQuality = "Okru:$quality".addPrefix(prefix)
 
             if (videoUrl.startsWith("https://")) {
-                Video(videoUrl, videoQuality, videoUrl)
+                Video(videoTitle = videoQuality, videoUrl = videoUrl,
+                    subtitleTracks = emptyList(), audioTracks = emptyList()
+                )
             } else {
                 null
             }

@@ -13,19 +13,24 @@ if (theme != null) evaluationDependsOn(theme.path)
 
 android {
     compileSdkVersion AndroidConfig.compileSdk
-    namespace AndroidConfig.namespace
+    namespace = AndroidConfig.namespace
 
     sourceSets {
         main {
             manifest.srcFile "AndroidManifest.xml"
+            if (!manifest.srcFile.exists()) {
+                def buildDir = layout.buildDirectory.get().getAsFile().path
+                mkdir(buildDir)
+                File tempFile = new File(buildDir, "tempAndroidManifest.xml")
+                if (!tempFile.exists()) {
+                    tempFile.withWriter {
+                        it.write('<?xml version="1.0" encoding="utf-8"?>\n<manifest />\n')
+                    }
+                }
+                manifest.srcFile(tempFile.path)
+            }
             java.srcDirs = ['src']
             res.srcDirs = ['res']
-        }
-        release {
-            manifest.srcFile "AndroidManifest.xml"
-        }
-        debug {
-            manifest.srcFile "AndroidManifest.xml"
         }
     }
 
@@ -34,7 +39,7 @@ android {
         targetSdkVersion AndroidConfig.targetSdk
         applicationIdSuffix project.parent.name + "." + project.name
         versionCode theme == null ? extVersionCode : theme.baseVersionCode + overrideVersionCode
-        versionName "14.$versionCode"
+        versionName "16.$versionCode"
         base {
             archivesName = "aniyomi-$applicationIdSuffix-v$versionName"
         }
@@ -59,17 +64,17 @@ android {
 
     signingConfigs {
         release {
-            storeFile rootProject.file("signingkey.jks")
-            storePassword System.getenv("KEY_STORE_PASSWORD")
-            keyAlias System.getenv("ALIAS")
-            keyPassword System.getenv("KEY_PASSWORD")
+            storeFile = rootProject.file("signingkey.jks")
+            storePassword = System.getenv("KEY_STORE_PASSWORD")
+            keyAlias = System.getenv("ALIAS")
+            keyPassword = System.getenv("KEY_PASSWORD")
         }
     }
 
     buildTypes {
         release {
-            signingConfig signingConfigs.release
-            minifyEnabled false
+            signingConfig = signingConfigs.release
+            minifyEnabled = false
         }
     }
 
@@ -79,20 +84,20 @@ android {
 
     buildFeatures {
         // Disable unused AGP features
-        aidl false
-        renderScript false
-        resValues false
-        shaders false
-        buildConfig true
+        aidl = false
+        renderScript = false
+        resValues = false
+        shaders = false
+        buildConfig = true
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_1_8.toString()
+        jvmTarget = JavaVersion.VERSION_17.toString()
         freeCompilerArgs += "-opt-in=kotlinx.serialization.ExperimentalSerializationApi"
     }
 }

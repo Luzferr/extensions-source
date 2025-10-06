@@ -48,7 +48,7 @@ class DoodExtractor(private val client: OkHttpClient) {
 
             val trueUrl = "$videoUrlStart$randomString?token=$token&expiry=$expiry"
 
-            Video(trueUrl, prefix + "Doodstream " + newQuality , trueUrl, headers = doodHeaders(doodHost), subtitleTracks = externalSubs)
+            Video(videoTitle = prefix + "Doodstream " + newQuality, videoUrl = trueUrl, headers = doodHeaders(doodHost), subtitleTracks = externalSubs, audioTracks = emptyList())
         }.getOrNull()
     }
 

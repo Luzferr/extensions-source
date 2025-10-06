@@ -91,13 +91,11 @@ class PlaylistUtils(private val client: OkHttpClient, private val headers: Heade
         // Check if there isn't multiple streams available
         if (PLAYLIST_SEPARATOR !in masterPlaylist) {
             return listOf(
-                Video(
-                    playlistUrl,
-                    videoNameGen("Video"),
-                    playlistUrl,
+                Video(videoTitle = videoNameGen("Video"),
+                    videoUrl = playlistUrl,
                     headers = masterHeaders,
                     subtitleTracks = subtitleList,
-                    audioTracks = audioList,
+                    audioTracks = audioList
                 ),
             )
         }
@@ -143,13 +141,11 @@ class PlaylistUtils(private val client: OkHttpClient, private val headers: Heade
                 getAbsoluteUrl(url, playlistUrl, masterUrlBasePath)?.trimEnd()
             } ?: return@mapNotNull null
 
-            Video(
-                videoUrl,
-                videoNameGen(resolution),
-                videoUrl,
+            Video(videoTitle = videoNameGen(resolution),
+                videoUrl = videoUrl,
                 headers = videoHeadersGen(headers, referer, videoUrl),
                 subtitleTracks = subtitleTracks,
-                audioTracks = audioTracks,
+                audioTracks = audioTracks
             )
         }
     }
@@ -311,13 +307,11 @@ class PlaylistUtils(private val client: OkHttpClient, private val headers: Heade
             val res = videoSrc.attr("height") + "p"
             val videoUrl = videoSrc.text()
 
-            Video(
-                videoUrl,
-                videoNameGen(res, bandwidth),
-                videoUrl,
-                audioTracks = audioTracks,
-                subtitleTracks = subtitleList,
+            Video(videoTitle = videoNameGen(res, bandwidth),
+                videoUrl = videoUrl,
                 headers = videoHeadersGen(headers, referer, videoUrl),
+                subtitleTracks = subtitleList,
+                audioTracks = audioTracks
             )
         }
     }
@@ -361,7 +355,7 @@ class PlaylistUtils(private val client: OkHttpClient, private val headers: Heade
 
     companion object {
         private val FIX_SUBTITLE_REGEX = Regex("""${'$'}(\n{2,})(?!(?:\d+:)*\d+(?:\.\d+)?\s-+>\s(?:\d+:)*\d+(?:\.\d+)?)""", RegexOption.MULTILINE)
-        
+
         private const val PLAYLIST_SEPARATOR = "#EXT-X-STREAM-INF:"
 
         private val SUBTITLE_REGEX by lazy { Regex("""#EXT-X-MEDIA:TYPE=SUBTITLES.*?NAME="(.*?)".*?URI="(.*?)"""") }
