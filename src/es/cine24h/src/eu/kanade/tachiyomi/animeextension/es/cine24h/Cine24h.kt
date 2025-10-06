@@ -61,7 +61,9 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
         private const val FLAG_US = "\uD83C\uDDFA\uD83C\uDDF8 "
     }
 
-    private val episodeRegex = Regex("(\\d+)[xX](\\d+)")
+    private val seasonEpisodeRegex = Regex("(\\d+)\\s*[xX-]\\s*(\\d+)")
+    private val slugEpisodeRegex = Regex("(?:season|temporada)[^\\d]*(\\d+)[^\\d]+(?:episode|episodio|capitulo)[^\\d]*(\\d+)", RegexOption.IGNORE_CASE)
+    private val seasonLabelRegex = Regex("(\\d+)")
 
     override fun animeDetailsParse(response: Response): SAnime {
         val document = response.asJsoup()
@@ -204,44 +206,128 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
     }
 
     private fun parseSeriesEpisodes(document: Document): List<SEpisode> {
+        val structuredEpisodes = parseStructuredSeasons(document)
+        if (structuredEpisodes.isNotEmpty()) return structuredEpisodes
+
+        val fallbackEpisodes = parseEpisodeAnchorsFallback(document)
+        if (fallbackEpisodes.isNotEmpty()) return fallbackEpisodes
+
+        return listOf(createMovieEpisode(document))
+    }
+
+    private fun parseStructuredSeasons(document: Document): List<SEpisode> {
+        val seasonBlocks = document.select("#seasons .se-c, #seasons > div")
+        if (seasonBlocks.isEmpty()) return emptyList()
+
+        val seenUrls = mutableSetOf<String>()
+        val episodes = seasonBlocks.flatMap { seasonBlock ->
+            val seasonLabel = seasonBlock.selectFirst(".se-t")?.text()?.trim()
+            val defaultSeason = seasonLabelRegex.find(seasonLabel.orEmpty())?.value?.toIntOrNull()
+
+            seasonBlock.select("ul.episodios > li")
+                .toList()
+                .mapIndexedNotNull { index, element ->
+                    val anchor = element.selectFirst("a[href]") ?: return@mapIndexedNotNull null
+                    val href = anchor.attr("abs:href")
+                    if (!seenUrls.add(href)) return@mapIndexedNotNull null
+
+                    val numerando = element.selectFirst(".numerando")?.text()
+                    val titleText = anchor.ownText().ifBlank { anchor.text() }.trim()
+
+                    val (seasonNumber, episodeNumber) = findSeasonEpisode(numerando, seasonLabel, titleText, href)
+                        ?: Pair(defaultSeason ?: 1, index + 1)
+
+                    val resolvedSeason = seasonNumber ?: defaultSeason ?: 1
+                    val resolvedEpisode = episodeNumber ?: index + 1
+
+                    val displayName = buildEpisodeName(resolvedSeason, resolvedEpisode, titleText)
+
+                    SEpisode.create().apply {
+                        setUrlWithoutDomain(href)
+                        name = displayName
+                        episode_number = ((resolvedSeason.coerceAtLeast(0) * 100) + resolvedEpisode).toFloat()
+                    }
+                }
+        }
+
+        return episodes.sortedByDescending { it.episode_number }
+    }
+
+    private fun createMovieEpisode(document: Document): SEpisode {
+        return SEpisode.create().apply {
+            episode_number = 1f
+            name = "PELÍCULA"
+            scanlator = document.select(".AAIco-date_range").text().trim()
+            setUrlWithoutDomain(document.location())
+        }
+    }
+
+    private fun parseEpisodeAnchorsFallback(document: Document): List<SEpisode> {
         val episodeAnchors = document.select("a[href*=\"/episode/\"]")
             .toList()
             .filter { it.text().isNotBlank() }
             .distinctBy { it.attr("abs:href") }
 
-        val episodes = episodeAnchors.mapIndexed { index, anchor ->
+        if (episodeAnchors.isEmpty()) return emptyList()
+
+        val episodes = episodeAnchors.mapIndexedNotNull { index, anchor ->
             val href = anchor.attr("abs:href")
             val rawName = anchor.text().trim()
 
-            val match = episodeRegex.find(href) ?: episodeRegex.find(rawName)
-            val season = match?.groupValues?.getOrNull(1)
-            val episodeNumber = match?.groupValues?.getOrNull(2)
+            val (seasonNumber, episodeNumber) = findSeasonEpisode(rawName, href)
+                ?: Pair(null, null)
 
-            val baseName = match
-                ?.let { rawName.replace(it.value, "").trim(' ', '-', ':') }
-                ?.takeIf { it.isNotBlank() }
-                ?: rawName
+            val baseName = rawName
+                .takeIf { it.isNotBlank() }
+                ?: "Episodio ${index + 1}"
 
-            val formattedName = if (season != null && episodeNumber != null) {
-                "T$season - E$episodeNumber" + if (baseName.isNotBlank()) " - $baseName" else ""
+            val resolvedSeason = seasonNumber ?: 0
+            val resolvedEpisode = episodeNumber ?: (index + 1)
+
+            val displayName = if (seasonNumber != null && episodeNumber != null) {
+                buildEpisodeName(resolvedSeason, resolvedEpisode, rawName)
             } else {
-                baseName.ifBlank { "Episodio ${index + 1}" }
+                baseName
             }
-
-            val number = match?.let {
-                val seasonValue = it.groupValues.getOrNull(1)?.toIntOrNull() ?: 0
-                val episodeValue = it.groupValues.getOrNull(2)?.toIntOrNull() ?: 0
-                (seasonValue * 100 + episodeValue).toFloat()
-            } ?: (index + 1).toFloat()
 
             SEpisode.create().apply {
                 setUrlWithoutDomain(href)
-                name = formattedName
-                episode_number = number
+                name = displayName
+                episode_number = if (seasonNumber != null && episodeNumber != null) {
+                    (resolvedSeason * 100 + resolvedEpisode).toFloat()
+                } else {
+                    (index + 1).toFloat()
+                }
             }
         }
 
-        return episodes.reversed()
+        return episodes.sortedByDescending { it.episode_number }
+    }
+
+    private fun findSeasonEpisode(vararg sources: String?): Pair<Int?, Int?>? {
+        sources.forEach { source ->
+            if (source.isNullOrBlank()) return@forEach
+
+            seasonEpisodeRegex.find(source)?.let { match ->
+                val season = match.groupValues.getOrNull(1)?.toIntOrNull()
+                val episode = match.groupValues.getOrNull(2)?.toIntOrNull()
+                return season to episode
+            }
+
+            slugEpisodeRegex.find(source)?.let { match ->
+                val season = match.groupValues.getOrNull(1)?.toIntOrNull()
+                val episode = match.groupValues.getOrNull(2)?.toIntOrNull()
+                return season to episode
+            }
+        }
+
+        return null
+    }
+
+    private fun buildEpisodeName(seasonNumber: Int, episodeNumber: Int, titleText: String): String {
+        val base = "T$seasonNumber - E$episodeNumber"
+        val cleanTitle = titleText.trim().takeIf { it.isNotBlank() && !it.startsWith(base) }
+        return cleanTitle?.let { "$base - $it" } ?: base
     }
 
     override fun videoListParse(response: Response): List<Video> {
