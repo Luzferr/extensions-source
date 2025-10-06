@@ -2,6 +2,8 @@ package eu.kanade.tachiyomi.animeextension.es.cine24h
 
 import android.app.Application
 import android.content.SharedPreferences
+import android.util.Base64
+import android.util.Log
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
@@ -15,7 +17,6 @@ import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.lib.doodextractor.DoodExtractor
 import eu.kanade.tachiyomi.lib.fastreamextractor.FastreamExtractor
 import eu.kanade.tachiyomi.lib.filemoonextractor.FilemoonExtractor
-import eu.kanade.tachiyomi.lib.universalextractor.UniversalExtractor
 import eu.kanade.tachiyomi.lib.vidguardextractor.VidGuardExtractor
 import eu.kanade.tachiyomi.lib.voeextractor.VoeExtractor
 import eu.kanade.tachiyomi.network.GET
@@ -52,7 +53,7 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
 
         private const val PREF_SERVER_KEY = "preferred_server"
         private const val PREF_SERVER_DEFAULT = "Voe"
-        private val SERVER_LIST = arrayOf("Voe", "Fastream", "Filemoon", "Doodstream")
+        private val SERVER_LIST = arrayOf("Voe", "Fastream", "Filemoon", "Doodstream", "VidGuard")
 
         private const val FLAG_LAT = "\uD83C\uDDF2\uD83C\uDDFD "
         private const val FLAG_ES = "\uD83C\uDDEA\uD83C\uDDF8 "
@@ -246,11 +247,17 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
         val document = response.asJsoup()
         val referer = response.request.url.toString()
 
-        val playerOptions = document.select("ul#playeroptionsul li")
+        val playerOptions = document.select("ul#playeroptionsul li, ul.optnslst li[data-option], ul.optnslst li[data-src]")
         if (playerOptions.isNotEmpty()) {
-            return playerOptions.parallelCatchingFlatMapBlocking { option ->
-                val playerUrl = option.extractPlayerUrl(referer)
-                if (playerUrl.isBlank()) emptyList() else serverVideoResolver(playerUrl)
+            val uniqueOptions = playerOptions
+                .mapNotNull { option ->
+                    val url = option.extractPlayerUrl(referer)
+                    if (url.isBlank()) null else url
+                }
+                .distinct()
+
+            if (uniqueOptions.isNotEmpty()) {
+                return uniqueOptions.parallelCatchingFlatMapBlocking(::serverVideoResolver)
             }
         }
 
@@ -348,11 +355,19 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
     }
 
     private fun normalizePlayerUrl(url: String): String {
-        return when {
-            url.startsWith("//") -> "https:$url"
-            url.startsWith("/") -> "$baseUrl$url"
-            else -> url
+        if (url.isBlank()) return ""
+
+        val decoded = decodeIfBase64(url)
+        val cleaned = org.jsoup.nodes.Entities.unescape(decoded).trim()
+        if (cleaned.isBlank()) return ""
+
+        val resolved = when {
+            cleaned.startsWith("//") -> "https:$cleaned"
+            cleaned.startsWith("/") -> "$baseUrl$cleaned"
+            else -> cleaned
         }
+
+        return resolved.replace("&amp;", "&")
     }
 
     private fun extractEmbedCandidates(html: String): Set<String> {
@@ -369,20 +384,29 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
                     .orEmpty()
             }
             .map(::normalizePlayerUrl)
-            .filter(String::isNotBlank)
+            .filter { it.isNotBlank() && isSupportedHost(it) }
             .forEach(candidates::add)
 
         doc.select("source[src], video[src]")
             .map { it.attr("abs:src").ifBlank { it.attr("src") } }
             .map(::normalizePlayerUrl)
-            .filter(String::isNotBlank)
+            .filter { it.isNotBlank() && isSupportedHost(it) }
             .forEach(candidates::add)
+
+        val dataAttributes = listOf("data-src", "data-url", "data-video", "data-link", "data-player")
+        dataAttributes.forEach { attr ->
+            doc.select("[$attr]")
+                .map { it.attr(attr) }
+                .map(::normalizePlayerUrl)
+                .filter { it.isNotBlank() && isSupportedHost(it) }
+                .forEach(candidates::add)
+        }
 
         val text = doc.outerHtml()
         urlRegex.findAll(text)
             .map { it.value }
-            .filter { url -> hostHints.any { hint -> url.contains(hint, ignoreCase = true) } }
             .map(::normalizePlayerUrl)
+            .filter { it.isNotBlank() && isSupportedHost(it) }
             .forEach(candidates::add)
 
         return candidates
@@ -398,7 +422,6 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
         "doods",
         "ds2play",
         "listeamed",
-        "cine24h",
         "guard",
         "vembed",
         "bembed",
@@ -412,22 +435,51 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
         "mixdrop",
         "sbembed",
     )
+    private val base64Regex = Regex("^[A-Za-z0-9+/=_-]+$")
+
+    private fun isSupportedHost(url: String): Boolean {
+        val lower = url.lowercase()
+        if (lower.isBlank()) return false
+        if (lower.contains("trembed")) return true
+        if (lower.contains("/player")) return true
+        return hostHints.any { lower.contains(it) }
+    }
+
+    private fun decodeIfBase64(value: String): String {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) return ""
+        if (!trimmed.matches(base64Regex)) return trimmed
+
+        val sanitized = trimmed
+            .replace('-', '+')
+            .replace('_', '/')
+
+        val padded = if (sanitized.length % 4 == 0) sanitized else sanitized + "=".repeat(4 - (sanitized.length % 4))
+
+        return runCatching {
+            val decoded = Base64.decode(padded, Base64.DEFAULT)
+            val result = decoded.decodeToString().trim()
+            if (result.startsWith("http") || result.startsWith("//") || result.startsWith("/")) result else trimmed
+        }.getOrElse { trimmed }
+    }
 
     /*--------------------------------Video extractors------------------------------------*/
     private val filemoonExtractor by lazy { FilemoonExtractor(client) }
     private val doodExtractor by lazy { DoodExtractor(client) }
     private val voeExtractor by lazy { VoeExtractor(client, headers) }
     private val vidGuardExtractor by lazy { VidGuardExtractor(client) }
-    private val universalExtractor by lazy { UniversalExtractor(client) }
 
     private fun serverVideoResolver(url: String, depth: Int = 0): List<Video> {
         if (depth >= 3) return emptyList()
 
         val resolvedUrl = normalizePlayerUrl(url)
 
+        if (!isSupportedHost(resolvedUrl)) return emptyList()
+
         if (resolvedUrl.contains("?trembed=") || resolvedUrl.contains("&trembed=")) {
+            val refererHeader = if (depth == 0) baseUrl else resolvedUrl
             val embedHeaders = headers.newBuilder()
-                .add("Referer", baseUrl)
+                .add("Referer", refererHeader)
                 .add("X-Requested-With", "XMLHttpRequest")
                 .build()
 
@@ -439,8 +491,19 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
 
             if (embedBody.isBlank()) return emptyList()
 
-            val candidates = extractEmbedCandidates(embedBody)
+            val embedDocument = Jsoup.parse(embedBody)
+
+            val dataAttributes = listOf("data-src", "data-url", "data-video", "data-link", "data-player")
+            val attributeCandidates = dataAttributes.flatMap { attr ->
+                embedDocument.select("[$attr]")
+                    .map { element -> normalizePlayerUrl(element.attr(attr)) }
+            }
+
+            val candidates = (attributeCandidates + extractEmbedCandidates(embedBody))
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
                 .filterNot { it.equals(resolvedUrl, ignoreCase = true) }
+                .toSet()
 
             if (candidates.isEmpty()) {
                 val iframeFallback = Jsoup.parse(embedBody)
@@ -458,6 +521,7 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
 
             return candidates.flatMap { candidate -> serverVideoResolver(candidate, depth + 1) }
         }
+        Log.e("Cine24h", "Resolving video from: $resolvedUrl")
 
         return when {
             arrayOf("fastream").any(resolvedUrl) -> {
@@ -471,7 +535,7 @@ open class Cine24h : ConfigurableAnimeSource, AnimeHttpSource() {
             arrayOf("filemoon", "moonplayer", "moonwatch").any(resolvedUrl) -> filemoonExtractor.videosFromUrl(resolvedUrl, prefix = "Filemoon:", headers = headers)
             arrayOf("doodstream", "dood.", "ds2play", "doods.").any(resolvedUrl) -> doodExtractor.videosFromUrl(resolvedUrl, "")
             arrayOf("voe", "jilliandescribecompany").any(resolvedUrl) -> voeExtractor.videosFromUrl(resolvedUrl)
-            arrayOf("vembed", "guard", "listeamed", "bembed", "vgfplay").any(resolvedUrl) -> vidGuardExtractor.videosFromUrl(resolvedUrl, prefix = "")
+            arrayOf("vembed", "guard", "listeamed", "bembed", "vgfplay","vidGuard").any(resolvedUrl) -> vidGuardExtractor.videosFromUrl(resolvedUrl, prefix = "")
             else -> emptyList()
         }
     }
