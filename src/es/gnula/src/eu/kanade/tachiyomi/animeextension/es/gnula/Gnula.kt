@@ -177,10 +177,15 @@ class Gnula :
 
     override fun episodeListParse(response: Response): List<SEpisode> {
         val document = response.asJsoup()
+        val jsonString = document.selectFirst("script:containsData({\"props\":{\"pageProps\":)")?.data() ?: return emptyList()
+        val root = runCatching { json.parseToJsonElement(jsonString).jsonObject }.getOrNull() ?: return emptyList()
+        val pageProps = root.obj("props")?.obj("pageProps") ?: return emptyList()
+
         return if (response.request.url
                 .toString()
                 .contains("/movies/")
         ) {
+            pageProps.obj("post") ?: return emptyList()
             listOf(
                 SEpisode.create().apply {
                     name = "Película"
@@ -189,9 +194,6 @@ class Gnula :
                 },
             )
         } else {
-            val jsonString = document.selectFirst("script:containsData({\"props\":{\"pageProps\":)")?.data() ?: return emptyList()
-            val root = runCatching { json.parseToJsonElement(jsonString).jsonObject }.getOrNull() ?: return emptyList()
-            val pageProps = root.obj("props")?.obj("pageProps") ?: return emptyList()
             val post = pageProps.obj("post") ?: return emptyList()
             val seasons = post.array("seasons") ?: return emptyList()
             var episodeCounter = 1F
@@ -209,11 +211,15 @@ class Gnula :
                         val slugEpisode = slug.string("episode") ?: return@mapNotNull null
                         val episodeNumber = episodeObj.long("number")?.toInt() ?: 0
                         val title = episodeObj.string("title") ?: ""
+                        val overview = episodeObj.string("overview") ?: episodeObj.string("description")
+                        val preview = episodeObj.string("image")?.optimizeImageUrl()
 
                         SEpisode.create().apply {
                             episode_number = episodeCounter++
                             name = "T$seasonNumber - E$episodeNumber - $title"
                             date_upload = episodeObj.string("releaseDate")?.toDate() ?: 0L
+                            summary = overview
+                            preview_url = preview
                             setUrlWithoutDomain("$baseUrl/series/$slugName/seasons/$slugSeason/episodes/$slugEpisode")
                         }
                     }
@@ -669,6 +675,13 @@ class Gnula :
     private fun JsonObject.array(key: String): JsonArray? = get(key) as? JsonArray
 
     private fun JsonObject.obj(key: String): JsonObject? = get(key) as? JsonObject
+
+    private fun String.optimizeImageUrl(): String =
+        if (contains("/original/", ignoreCase = true)) {
+            replace("/original/", "/w400/")
+        } else {
+            this
+        }
 
     private fun JsonElement?.jsonObjectOrNull(): JsonObject? = this as? JsonObject
 
