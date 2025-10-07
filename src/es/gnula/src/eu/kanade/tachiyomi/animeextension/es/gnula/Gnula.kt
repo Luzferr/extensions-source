@@ -4,10 +4,12 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.FetchType
 import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
@@ -97,6 +99,11 @@ class Gnula :
         private const val PREF_LANGUAGE_DEFAULT = "[LAT]"
         private val LANGUAGE_LIST = arrayOf("[LAT]", "[CAST]", "[SUB]")
 
+        const val PREF_SPLIT_SEASONS_KEY = "split_seasons"
+        const val PREF_SPLIT_SEASONS_DEFAULT = true
+        internal const val LEGACY_PREF_FETCH_TYPE_KEY = "preferred_fetch_type"
+        internal const val LEGACY_FETCH_TYPE_SEASONS = "1"
+
         private val DATE_FORMATTER by lazy {
             SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
         }
@@ -159,6 +166,8 @@ class Gnula :
                 SAnime.create().apply {
                     title = item.obj("titles")?.string("name") ?: ""
                     thumbnail_url = item.obj("images")?.string("poster")?.replace("/original/", "/w200/")
+                    val isSeries = type.equals("PaginatedSerie", true)
+                    fetch_type = preferredFetchType(isSeries)
                     setUrlWithoutDomain(urlSolverByType(type, slug))
                 }
             }
@@ -176,60 +185,48 @@ class Gnula :
     override fun latestUpdatesParse(response: Response) = popularAnimeParse(response)
 
     override fun episodeListParse(response: Response): List<SEpisode> {
-        val document = response.asJsoup()
-        val jsonString = document.selectFirst("script:containsData({\"props\":{\"pageProps\":)")?.data() ?: return emptyList()
-        val root = runCatching { json.parseToJsonElement(jsonString).jsonObject }.getOrNull() ?: return emptyList()
-        val pageProps = root.obj("props")?.obj("pageProps") ?: return emptyList()
+        val pageProps = response.extractPageProps() ?: return emptyList()
+        val meta = pageProps.toGnulaMeta() ?: return emptyList()
 
-        return if (response.request.url
-                .toString()
-                .contains("/movies/")
-        ) {
-            pageProps.obj("post") ?: return emptyList()
-            listOf(
+        if (meta.isMovie) {
+            val episodeUrl = response.request.url.toString()
+            return listOf(
                 SEpisode.create().apply {
-                    name = "Película"
+                    name = meta.title.ifBlank { "Película" }
                     episode_number = 1F
-                    setUrlWithoutDomain(response.request.url.toString())
+                    setUrlWithoutDomain(episodeUrl.removePrefix(baseUrl))
                 },
             )
-        } else {
-            val post = pageProps.obj("post") ?: return emptyList()
-            val seasons = post.array("seasons") ?: return emptyList()
-            var episodeCounter = 1F
-            seasons
-                .flatMap { seasonElement ->
-                    val seasonObj = seasonElement.jsonObjectOrNull() ?: return@flatMap emptyList()
-                    val seasonNumber = seasonObj.long("number")?.toInt() ?: 0
-                    val episodes = seasonObj.array("episodes") ?: return@flatMap emptyList()
+        }
 
-                    episodes.mapNotNull { episodeElement ->
-                        val episodeObj = episodeElement.jsonObjectOrNull() ?: return@mapNotNull null
-                        val slug = episodeObj.obj("slug") ?: return@mapNotNull null
-                        val slugName = slug.string("name") ?: return@mapNotNull null
-                        val slugSeason = slug.string("season") ?: return@mapNotNull null
-                        val slugEpisode = slug.string("episode") ?: return@mapNotNull null
-                        val episodeNumber = episodeObj.long("number")?.toInt() ?: 0
-                        val title = episodeObj.string("title") ?: ""
-                        val overview = episodeObj.string("overview") ?: episodeObj.string("description")
-                        val preview = episodeObj.string("image")?.optimizeImageUrl()
-
-                        SEpisode.create().apply {
-                            episode_number = episodeCounter++
-                            name = "T$seasonNumber - E$episodeNumber - $title"
-                            date_upload = episodeObj.string("releaseDate")?.toDate() ?: 0L
-                            summary = overview
-                            preview_url = preview
-                            setUrlWithoutDomain("$baseUrl/series/$slugName/seasons/$slugSeason/episodes/$slugEpisode")
-                        }
-                    }
-                }
-        }.reversed()
+        val selectedSeason =
+            response.request.url
+                .queryParameter("season")
+                ?.toIntOrNull()
+        return meta.toEpisodeList(baseUrl, selectedSeason)
     }
 
-    override suspend fun getSeasonList(anime: SAnime): List<SAnime> = emptyList()
+    override suspend fun getSeasonList(anime: SAnime): List<SAnime> {
+        if (anime.fetch_type != FetchType.Seasons) return emptyList()
 
-    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+        val request = GET(anime.url.toAbsoluteUrl(), headers)
+        return client.newCall(request).execute().use { seasonListParse(it) }
+    }
+
+    override fun seasonListParse(response: Response): List<SAnime> {
+        val pageProps = response.extractPageProps() ?: return emptyList()
+        val meta = pageProps.toGnulaMeta() ?: return emptyList()
+        if (meta.isMovie) return emptyList()
+
+        val basePath =
+            response.request.url
+                .toString()
+                .removePrefix(baseUrl)
+
+        return meta.seasons.map { season ->
+            season.toSAnime(basePath, meta, baseUrl)
+        }
+    }
 
     override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
@@ -526,29 +523,33 @@ class Gnula :
     override fun searchAnimeParse(response: Response): AnimesPage = popularAnimeParse(response)
 
     override fun animeDetailsParse(response: Response): SAnime {
-        val document = response.asJsoup()
-        val jsonString = document.selectFirst("script:containsData({\"props\":{\"pageProps\":)")?.data() ?: return SAnime.create()
-        val root = runCatching { json.parseToJsonElement(jsonString).jsonObject }.getOrNull() ?: return SAnime.create()
-        val pageProps = root.obj("props")?.obj("pageProps") ?: return SAnime.create()
-        val post = pageProps.obj("post") ?: return SAnime.create()
+        val pageProps = response.extractPageProps() ?: return SAnime.create()
+        val meta = pageProps.toGnulaMeta() ?: return SAnime.create()
+        val requestUrl = response.request.url
+        val forcedEpisodeMode =
+            requestUrl.queryParameter("season") != null ||
+                requestUrl.encodedPath.contains("/episodes/")
+        val fetchType =
+            when {
+                forcedEpisodeMode -> FetchType.Episodes
+                else -> preferredFetchType(meta.seasons.isNotEmpty())
+            }
+
         return SAnime.create().apply {
-            title = post.obj("titles")?.string("name") ?: ""
-            thumbnail_url = post.obj("images")?.string("poster")
-            description = post.string("overview")
-            genre =
-                post
-                    .array("genres")
-                    ?.mapNotNull { it.jsonObjectOrNull()?.string("name")?.takeIf { name -> name.isNotBlank() } }
-                    ?.joinToString()
-            artist =
-                post
-                    .obj("cast")
-                    ?.array("acting")
-                    ?.firstNotNullOfOrNull {
-                        it.jsonObjectOrNull()?.string("name")?.takeIf { name -> name.isNotBlank() }
-                    }
-                    ?: ""
-            status = if (root.string("page")?.contains("movie", true) == true) SAnime.COMPLETED else SAnime.UNKNOWN
+            title = meta.title
+            thumbnail_url = meta.poster
+            description = meta.overview
+            meta.genres
+                .takeIf { it.isNotEmpty() }
+                ?.joinToString()
+                ?.let { genre = it }
+            meta.director?.takeIf { it.isNotBlank() }?.let { author = it }
+            artist = meta.cast.firstOrNull().orEmpty()
+            status = if (meta.isMovie) SAnime.COMPLETED else SAnime.UNKNOWN
+            fetch_type = fetchType
+            if (forcedEpisodeMode) {
+                url = requestUrl.toString().removePrefix(baseUrl)
+            }
         }
     }
 
@@ -623,6 +624,43 @@ class Gnula :
         fun matchesServer(preferred: String): Int = if (serverDisplay.equals(preferred, ignoreCase = true)) 1 else 0
     }
 
+    private data class GnulaMeta(
+        val title: String,
+        val overview: String?,
+        val poster: String?,
+        val genres: List<String>,
+        val director: String?,
+        val cast: List<String>,
+        val seasons: List<GnulaSeason>,
+        val isMovie: Boolean,
+    )
+
+    private data class GnulaSeason(
+        val number: Int,
+        val title: String?,
+        val overview: String?,
+        val slugName: String?,
+        val slugSeason: String?,
+        val episodes: List<GnulaEpisode>,
+    )
+
+    private data class GnulaEpisode(
+        val season: Int,
+        val number: Int,
+        val title: String?,
+        val overview: String?,
+        val image: String?,
+        val releaseDate: String?,
+        val slugName: String,
+        val slugSeason: String,
+        val slugEpisode: String,
+    )
+
+    private data class GnulaEpisodeBundle(
+        val seasonNumber: Int,
+        val episode: GnulaEpisode,
+    )
+
     private fun displayServerName(serverSlug: String): String {
         val canonical = canonicalServerSlug(serverSlug)
         if (canonical.isBlank()) return "Unknown"
@@ -642,6 +680,234 @@ class Gnula :
                         name.equals(lower, true) || lower.contains(name, true)
                     }
             }?.first ?: lower
+    }
+
+    private fun Response.extractPageProps(): JsonObject? {
+        val document = asJsoup()
+        val jsonString = document.selectFirst("script:containsData({\"props\":{\"pageProps\":)")?.data() ?: return null
+        val root = runCatching { json.parseToJsonElement(jsonString).jsonObject }.getOrNull() ?: return null
+        return root.obj("props")?.obj("pageProps")
+    }
+
+    private fun JsonObject.toGnulaMeta(): GnulaMeta? {
+        val post = obj("post") ?: return null
+        val title = post.obj("titles")?.string("name") ?: return null
+        val overview = post.string("overview")
+        val poster = post.obj("images")?.string("poster")?.optimizeImageUrl()
+        val genres =
+            post
+                .array("genres")
+                ?.mapNotNull { element ->
+                    element
+                        .jsonObjectOrNull()
+                        ?.string("name")
+                        ?.takeIf { it.isNotBlank() }
+                }
+                ?: emptyList()
+        val director = post.string("director")
+        val cast =
+            post
+                .obj("cast")
+                ?.array("acting")
+                ?.mapNotNull { element ->
+                    element
+                        .jsonObjectOrNull()
+                        ?.string("name")
+                        ?.takeIf { it.isNotBlank() }
+                }
+                ?: emptyList()
+        val seasons =
+            post
+                .array("seasons")
+                ?.mapNotNull { element ->
+                    element.jsonObjectOrNull()?.toGnulaSeason(overview)
+                }
+                ?: emptyList()
+        val isMovie = post.string("type")?.equals("movie", true) == true || seasons.isEmpty()
+
+        return GnulaMeta(
+            title = title,
+            overview = overview,
+            poster = poster,
+            genres = genres,
+            director = director,
+            cast = cast,
+            seasons = seasons,
+            isMovie = isMovie,
+        )
+    }
+
+    private fun JsonObject.toGnulaSeason(seriesOverview: String?): GnulaSeason? {
+        val number = long("number")?.toInt() ?: return null
+        val title = string("title")
+        val overview = string("overview") ?: seriesOverview
+        val slug = obj("slug")
+        val slugName = slug?.string("name")
+        val slugSeason = slug?.string("season")
+        val episodes =
+            array("episodes")
+                ?.mapIndexedNotNull { index, element ->
+                    element.jsonObjectOrNull()?.toGnulaEpisode(number, index + 1)
+                }
+                ?: emptyList()
+
+        return GnulaSeason(
+            number = number,
+            title = title,
+            overview = overview,
+            slugName = slugName,
+            slugSeason = slugSeason,
+            episodes = episodes,
+        )
+    }
+
+    private fun JsonObject.toGnulaEpisode(
+        seasonNumber: Int,
+        fallbackNumber: Int,
+    ): GnulaEpisode? {
+        val slug = obj("slug") ?: return null
+        val slugName = slug.string("name") ?: return null
+        val slugSeason = slug.string("season") ?: seasonNumber.toString()
+        val slugEpisode = slug.string("episode") ?: return null
+        val episodeNumber =
+            long("number")?.toInt()
+                ?: slugEpisode.filter(Char::isDigit).toIntOrNull()
+                ?: fallbackNumber
+        val title = string("title")
+        val overview = string("overview") ?: string("description")
+        val image = string("image")?.optimizeImageUrl()
+        val releaseDate = string("releaseDate")
+
+        return GnulaEpisode(
+            season = seasonNumber,
+            number = episodeNumber,
+            title = title,
+            overview = overview,
+            image = image,
+            releaseDate = releaseDate,
+            slugName = slugName,
+            slugSeason = slugSeason,
+            slugEpisode = slugEpisode,
+        )
+    }
+
+    private fun GnulaSeason.toSAnime(
+        baseUrlPath: String,
+        meta: GnulaMeta,
+        sourceBaseUrl: String,
+    ): SAnime {
+        val normalizedNumber =
+            slugSeason
+                ?.filter(Char::isDigit)
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+                ?: number.takeIf { it > 0 }
+                ?: 1
+        val resolvedTitle =
+            title?.takeIf { it.isNotBlank() }
+                ?: when {
+                    meta.title.isNotBlank() -> "${meta.title} - Temporada $normalizedNumber"
+                    else -> "Temporada $normalizedNumber"
+                }
+        val seasonDescription = overview ?: meta.overview
+
+        return SAnime.create().apply {
+            title = resolvedTitle
+            seasonDescription?.takeIf { it.isNotBlank() }?.let { description = it }
+            thumbnail_url = meta.poster
+            fetch_type = FetchType.Episodes
+            season_number = normalizedNumber.toDouble()
+            meta.genres
+                .takeIf { it.isNotEmpty() }
+                ?.joinToString(", ")
+                ?.let { genre = it }
+            meta.director?.takeIf { it.isNotBlank() }?.let { author = it }
+            meta.cast
+                .firstOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { artist = it }
+            status = if (meta.isMovie) SAnime.COMPLETED else SAnime.UNKNOWN
+
+            setUrlWithoutDomain(buildSeasonUrl(sourceBaseUrl, baseUrlPath, normalizedNumber))
+        }
+    }
+
+    private fun GnulaMeta.toEpisodeList(
+        baseUrl: String,
+        selectedSeason: Int?,
+    ): List<SEpisode> {
+        val seasonsToUse = seasons.filter { selectedSeason == null || it.number == selectedSeason }
+        if (seasonsToUse.isEmpty()) return emptyList()
+
+        val singleSeason = seasonsToUse.size == 1
+
+        return seasonsToUse
+            .flatMap { season ->
+                season.episodes.map { episode ->
+                    GnulaEpisodeBundle(season.number, episode)
+                }
+            }.sortedWith(compareBy({ it.seasonNumber }, { it.episode.number }))
+            .reversed()
+            .map { bundle ->
+                val episode = bundle.episode
+                val episodeNumberValue =
+                    if (singleSeason) {
+                        episode.number.toFloat()
+                    } else {
+                        buildCombinedEpisodeNumber(bundle.seasonNumber, episode.number)
+                    }
+                SEpisode.create().apply {
+                    episode_number = episodeNumberValue
+                    name = buildEpisodeName(bundle.seasonNumber, episode.number, episode.title)
+                    summary = episode.overview
+                    preview_url = episode.image
+                    date_upload = episode.releaseDate?.toDate() ?: 0L
+                    setUrlWithoutDomain(
+                        "$baseUrl/series/${episode.slugName}/seasons/${episode.slugSeason}/episodes/${episode.slugEpisode}",
+                    )
+                }
+            }
+    }
+
+    private fun buildEpisodeName(
+        season: Int,
+        episode: Int,
+        title: String?,
+    ): String {
+        val label = title?.takeIf { it.isNotBlank() }
+        return buildString {
+            append("E")
+            append(episode)
+            label?.let {
+                append(" - ")
+                append(it)
+            }
+            append(" (T")
+            append(season)
+            append(")")
+        }
+    }
+
+    private fun buildCombinedEpisodeNumber(
+        season: Int,
+        episode: Int,
+    ): Float = (season * 1000 + episode).toFloat()
+
+    private fun buildSeasonUrl(
+        sourceBaseUrl: String,
+        baseUrlPath: String,
+        seasonNumber: Int,
+    ): String {
+        val normalizedPath =
+            when {
+                baseUrlPath.startsWith("http", true) -> baseUrlPath.removePrefix(sourceBaseUrl)
+                baseUrlPath.startsWith("/") -> baseUrlPath
+                baseUrlPath.isBlank() -> "/"
+                else -> "/${baseUrlPath.trimStart('/')}"
+            }
+        val hasQuery = normalizedPath.contains('?')
+        val separator = if (hasQuery) '&' else '?'
+        return "$normalizedPath${separator}season=$seasonNumber"
     }
 
     override fun getFilterList(): AnimeFilterList =
@@ -739,6 +1005,11 @@ class Gnula :
 
     private fun JsonElement?.stringValue(): String? = (this as? JsonPrimitive)?.contentOrNull
 
+    private fun prefersSeasonFetch(): Boolean = preferences.splitSeasons
+
+    private fun preferredFetchType(isSeries: Boolean): FetchType =
+        if (isSeries && prefersSeasonFetch()) FetchType.Seasons else FetchType.Episodes
+
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         ListPreference(screen.context)
             .apply {
@@ -790,5 +1061,44 @@ class Gnula :
                     preferences.edit().putString(key, entry).commit()
                 }
             }.also(screen::addPreference)
+
+        SwitchPreferenceCompat(screen.context)
+            .apply {
+                key = PREF_SPLIT_SEASONS_KEY
+                title = "Split seasons"
+                summary = "Mostrar temporadas como entradas separadas"
+                setDefaultValue(PREF_SPLIT_SEASONS_DEFAULT)
+                isChecked = preferences.splitSeasons
+
+                setOnPreferenceChangeListener { _, newValue ->
+                    preferences.splitSeasons = newValue as Boolean
+                    true
+                }
+            }.also(screen::addPreference)
     }
 }
+
+private var SharedPreferences.splitSeasons: Boolean
+    get() {
+        if (contains(Gnula.PREF_SPLIT_SEASONS_KEY)) {
+            return getBoolean(Gnula.PREF_SPLIT_SEASONS_KEY, true)
+        }
+
+        val legacy = getString(Gnula.LEGACY_PREF_FETCH_TYPE_KEY, null)
+        val migrated = legacy.equals(Gnula.LEGACY_FETCH_TYPE_SEASONS, ignoreCase = true)
+
+        if (legacy != null) {
+            edit()
+                .putBoolean(Gnula.PREF_SPLIT_SEASONS_KEY, migrated)
+                .remove(Gnula.LEGACY_PREF_FETCH_TYPE_KEY)
+                .apply()
+        }
+
+        return legacy?.let { migrated } ?: true
+    }
+    set(value) {
+        edit()
+            .putBoolean(Gnula.PREF_SPLIT_SEASONS_KEY, value)
+            .remove(Gnula.LEGACY_PREF_FETCH_TYPE_KEY)
+            .apply()
+    }
