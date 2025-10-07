@@ -7,6 +7,8 @@ import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.FetchType
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -25,8 +27,9 @@ import okhttp3.Response
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
-class AnimeAv1 : ConfigurableAnimeSource, AnimeHttpSource() {
-
+class AnimeAv1 :
+    AnimeHttpSource(),
+    ConfigurableAnimeSource {
     override val name = "AnimeAv1"
 
     override val baseUrl = "https://animeav1.com"
@@ -51,25 +54,31 @@ class AnimeAv1 : ConfigurableAnimeSource, AnimeHttpSource() {
 
         private const val PREF_SERVER_KEY = "preferred_server"
         private const val PREF_SERVER_DEFAULT = "PixelDrain"
-        private val SERVER_LIST = arrayOf(
-            "PixelDrain",
-            "HLS",
-            "StreamWish",
-            "Voe",
-            "YourUpload",
-            "FileLions",
-            "StreamHideVid",
-        )
+        private val SERVER_LIST =
+            arrayOf(
+                "PixelDrain",
+                "HLS",
+                "StreamWish",
+                "Voe",
+                "YourUpload",
+                "FileLions",
+                "StreamHideVid",
+            )
     }
+
+    private val languageSectionRegex = Regex("""([A-Z]+)\s*:\s*\[(.*?)\]""", setOf(RegexOption.DOT_MATCHES_ALL))
+    private val serverEntryRegex = Regex("""server\s*:\s*['\"]([^'\"]+)['\"]\s*,\s*url\s*:\s*['\"]([^'\"]+)['\"]""")
 
     override fun animeDetailsParse(response: Response): SAnime {
         val doc = response.asJsoup()
-        val animeDetails = SAnime.create().apply {
-            title = doc.selectFirst("h1.line-clamp-2")?.text()?.trim() ?: ""
-            description = doc.selectFirst(".entry > p")?.text()
-            genre = doc.select("header > .items-center > a").joinToString { it.text() }
-            thumbnail_url = doc.selectFirst("img.object-cover")?.attr("src")
-        }
+        val animeDetails =
+            SAnime.create().apply {
+                title = doc.selectFirst("h1.line-clamp-2")?.text()?.trim() ?: ""
+                description = doc.selectFirst(".entry > p")?.text()
+                genre = doc.select("header > .items-center > a").joinToString { it.text() }
+                thumbnail_url = doc.selectFirst("img.object-cover")?.attr("src")
+                fetch_type = FetchType.Episodes
+            }
         doc.select("header > .items-center.text-sm span").eachText().forEach {
             when {
                 it.contains("Finalizado") -> animeDetails.status = SAnime.COMPLETED
@@ -85,13 +94,15 @@ class AnimeAv1 : ConfigurableAnimeSource, AnimeHttpSource() {
         val document = response.asJsoup()
         val elements = document.select("article[class*=\"group/item\"]")
         val nextPage = document.select(".pointer-events-none:not([class*=\"max-sm:hidden\"]) ~ a").any()
-        val animeList = elements.map { element ->
-            SAnime.create().apply {
-                setUrlWithoutDomain(element.selectFirst("a")?.attr("abs:href").orEmpty())
-                title = element.select("header h3").text()
-                thumbnail_url = element.selectFirst(".bg-current img")?.attr("abs:src")
+        val animeList =
+            elements.map { element ->
+                SAnime.create().apply {
+                    setUrlWithoutDomain(element.selectFirst("a")?.attr("abs:href").orEmpty())
+                    title = element.select("header h3").text()
+                    thumbnail_url = element.selectFirst(".bg-current img")?.attr("abs:src")
+                    fetch_type = FetchType.Episodes
+                }
             }
-        }
         return AnimesPage(animeList, nextPage)
     }
 
@@ -99,64 +110,144 @@ class AnimeAv1 : ConfigurableAnimeSource, AnimeHttpSource() {
 
     override fun latestUpdatesParse(response: Response) = popularAnimeParse(response)
 
-    override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
+    override fun searchAnimeRequest(
+        page: Int,
+        query: String,
+        filters: AnimeFilterList,
+    ): Request {
         val params = AnimeAv1Filters.getSearchParameters(filters)
         return when {
-            query.isNotBlank() -> GET("$baseUrl/catalogo?search=$query&page=$page", headers)
-            params.filter.isNotBlank() -> GET("$baseUrl/catalogo${params.getQuery().run { if (isNotBlank()) "$this&page=$page" else this }}", headers)
-            else -> popularAnimeRequest(page)
+            query.isNotBlank() -> {
+                GET("$baseUrl/catalogo?search=$query&page=$page", headers)
+            }
+
+            params.filter.isNotBlank() -> {
+                GET(
+                    "$baseUrl/catalogo${params.getQuery().run { if (isNotBlank()) "$this&page=$page" else this }}",
+                    headers,
+                )
+            }
+
+            else -> {
+                popularAnimeRequest(page)
+            }
         }
     }
 
     override fun searchAnimeParse(response: Response) = popularAnimeParse(response)
+
+    override fun episodeListRequest(anime: SAnime): Request = GET(anime.url.toAbsoluteUrl(), headers)
 
     override fun episodeListParse(response: Response): List<SEpisode> {
         val doc = response.asJsoup()
         val script = doc.selectFirst("script:containsData(node_ids)")?.data().orEmpty()
         val episodeListRegex = """episodes\s*:\s*\[([^\]]*)\]""".toRegex()
         val episodeRegex = """\{\s*id\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*number\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*\}""".toRegex()
-        val episodes = episodeListRegex.find(script)?.let {
-            episodeRegex.findAll(it.groupValues[1]).map { match ->
-                val number = match.groupValues[2]
-                SEpisode.create().apply {
-                    name = "Episodio $number"
-                    episode_number = number.toFloatOrNull() ?: 0F
-                    setUrlWithoutDomain("${doc.location()}/$number")
-                }
-            }.toList()
-        }.orEmpty()
+        val episodes =
+            episodeListRegex
+                .find(script)
+                ?.let {
+                    episodeRegex
+                        .findAll(it.groupValues[1])
+                        .map { match ->
+                            val number = match.groupValues[2]
+                            SEpisode.create().apply {
+                                name = "Episodio $number"
+                                episode_number = number.toFloatOrNull() ?: 0F
+                                setUrlWithoutDomain("${doc.location().removeSuffix("/")}/$number")
+                            }
+                        }.toList()
+                }.orEmpty()
 
         return episodes.reversed()
     }
 
-    override fun getFilterList(): AnimeFilterList = AnimeAv1Filters.FILTER_LIST
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
 
-    override fun videoListParse(response: Response): List<Video> {
-        val doc = response.asJsoup()
-        val videoList = mutableListOf<Video>()
-        val script = doc.selectFirst("script:containsData(node_ids)")?.data() ?: return emptyList()
+    override fun hosterListRequest(episode: SEpisode): Request = GET(episode.url.toAbsoluteUrl(), headers)
 
-        val jsonRegex = Regex("""\{\s*server\s*:\s*"([^"]*)"\s*,\s*url\s*:\s*"([^"]*)"\s*\}""")
-        val subRegex = Regex("""SUB\s*:\s*\[([^\]]*)\]""")
-        val dubRegex = Regex("""DUB\s*:\s*\[([^\]]*)\]""")
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val document = response.asJsoup()
+        val script = document.selectFirst("script:containsData(node_ids)")?.data().orEmpty()
+        if (script.isBlank()) return emptyList()
 
-        fun processMatches(regex: Regex, type: String): List<Video> {
-            return regex.findAll(script)
-                .flatMap { jsonRegex.findAll(it.groupValues[1]) }
-                .map { it.groupValues[2].substringBefore("?embed") }
-                .distinct().toList()
-                .parallelCatchingFlatMapBlocking { url ->
-                    serverVideoResolver(url, type)
+        val hosterGroups = linkedMapOf<Pair<String, String>, MutableList<Video>>()
+
+        val requestEntries =
+            languageSectionRegex
+                .findAll(script)
+                .flatMap { sectionMatch ->
+                    val languageTag = sectionMatch.groupValues[1].trim().uppercase()
+                    val normalizedLanguage = if (languageTag == "ALL") "" else languageTag
+                    val block = sectionMatch.groupValues[2]
+                    serverEntryRegex
+                        .findAll(block)
+                        .mapNotNull { entryMatch ->
+                            val serverSlug = entryMatch.groupValues[1].trim()
+                            val url = entryMatch.groupValues[2].trim().substringBefore("?embed")
+                            if (url.isBlank()) {
+                                null
+                            } else {
+                                HosterRequestEntry(normalizedLanguage, serverSlug, url)
+                            }
+                        }
+                }.toList()
+
+        if (requestEntries.isEmpty()) return emptyList()
+
+        val resolvedEntries =
+            requestEntries.parallelCatchingFlatMapBlocking { entry ->
+                val videos = serverVideoResolver(entry.url, languageLabel(entry.languageTag), entry.serverSlug)
+                if (videos.isEmpty()) {
+                    emptyList()
+                } else {
+                    listOf(HosterEntry(entry.languageTag, entry.serverSlug, videos))
                 }
+            }
+
+        resolvedEntries.forEach { entry ->
+            val serverDisplay = displayServerName(entry.serverSlug)
+            val key = entry.languageTag to serverDisplay
+            val list = hosterGroups.getOrPut(key) { mutableListOf() }
+            list.addAll(entry.videos)
         }
 
-        processMatches(dubRegex, "DUB").also(videoList::addAll)
-        processMatches(subRegex, "SUB").also(videoList::addAll)
+        val preferredLang = preferences.getString(PREF_LANG_KEY, PREF_LANG_DEFAULT) ?: PREF_LANG_DEFAULT
+        val preferredServer = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT) ?: PREF_SERVER_DEFAULT
 
-        return videoList
+        val hosters =
+            hosterGroups.entries.mapIndexed { index, (key, videos) ->
+                val (languageTag, serverDisplay) = key
+                val languageDisplay = languageLabel(languageTag)
+                val sortedVideos = videos.sortVideos()
+                HosterGroupMeta(
+                    index = index,
+                    languageTag = languageTag,
+                    serverDisplay = serverDisplay,
+                    hoster =
+                        Hoster(
+                            hosterName =
+                                listOfNotNull(
+                                    languageDisplay.takeIf { it.isNotBlank() },
+                                    serverDisplay,
+                                ).joinToString(" ")
+                                    .ifBlank { serverDisplay },
+                            videoList = sortedVideos,
+                        ),
+                )
+            }
+
+        return hosters
+            .sortedWith(
+                compareByDescending<HosterGroupMeta> { it.matchesLanguage(preferredLang) }
+                    .thenByDescending { it.matchesServer(preferredServer) }
+                    .thenBy { it.index },
+            ).map { it.hoster }
     }
 
-    /*--------------------------------Video extractors------------------------------------*/
+    override fun getFilterList(): AnimeFilterList = AnimeAv1Filters.FILTER_LIST
+
+    // --------------------------------Video extractors------------------------------------
     private val voeExtractor by lazy { VoeExtractor(client, headers) }
     private val pixelDrainExtractor by lazy { PixelDrainExtractor(client) }
     private val mp4uploadExtractor by lazy { Mp4uploadExtractor(client) }
@@ -164,98 +255,301 @@ class AnimeAv1 : ConfigurableAnimeSource, AnimeHttpSource() {
     private val yourUploadExtractor by lazy { YourUploadExtractor(client) }
     private val universalExtractor by lazy { UniversalExtractor(client) }
 
-    fun serverVideoResolver(url: String, prefix: String = "", serverName: String? = ""): List<Video> {
-        return runCatching {
+    fun serverVideoResolver(
+        url: String,
+        prefix: String = "",
+        serverName: String? = "",
+    ): List<Video> =
+        runCatching {
             val source = serverName?.ifEmpty { url } ?: url
-            val matched = conventions.firstOrNull { (_, names) -> names.any { it.lowercase() in source.lowercase() } }?.first
+            val matched = canonicalServerSlug(source)
+            val serverDisplay = displayServerName(matched)
+            val prefixBase = buildPrefix(prefix, serverDisplay)
+            val prefixWithSpace = prefixBase.withTrailingSpace()
             when (matched) {
-                "voe" -> voeExtractor.videosFromUrl(url, "$prefix ")
-                "pixeldrain" -> pixelDrainExtractor.videosFromUrl(url, "$prefix ")
-                "mp4upload" -> mp4uploadExtractor.videosFromUrl(url, headers, prefix = "$prefix ")
-                "streamwish" -> streamWishExtractor.videosFromUrl(url, videoNameGen = { "$prefix StreamWish:$it" })
-                "yourupload" -> yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = "$prefix ")
-                "player.zilla" -> {
-                    val m3u = url.replace("play/", "m3u8/")
-                    listOf(Video(m3u, "$prefix HLS", m3u))
+                "voe" -> {
+                    voeExtractor.videosFromUrl(url, prefixWithSpace)
                 }
-                else -> universalExtractor.videosFromUrl(url, headers, prefix = "$prefix ")
+
+                "pixeldrain" -> {
+                    pixelDrainExtractor.videosFromUrl(url, prefixWithSpace)
+                }
+
+                "mp4upload" -> {
+                    mp4uploadExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
+                }
+
+                "streamwish" -> {
+                    streamWishExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
+                }
+
+                "filelions" -> {
+                    streamWishExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
+                }
+
+                "yourupload" -> {
+                    yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = prefixWithSpace)
+                }
+
+                "playerzilla" -> {
+                    val m3u = url.replace("play/", "m3u8/")
+                    listOf(
+                        Video(
+                            videoTitle = buildVideoName(prefixBase, "HLS"),
+                            videoUrl = m3u,
+                        ),
+                    )
+                }
+
+                else -> {
+                    universalExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
+                }
             }
         }.getOrNull() ?: emptyList()
-    }
 
-    private val conventions = listOf(
-        "voe" to listOf("voe", "tubelessceliolymph", "simpulumlamerop", "urochsunloath", "nathanfromsubject", "yip.", "metagnathtuggers", "donaldlineelse"),
-        "mp4upload" to listOf("mp4upload"),
-        "pixeldrain" to listOf("pixeldrain"),
-        "player.zilla" to listOf("player.zilla"),
-        "streamwish" to listOf("wishembed", "streamwish", "strwish", "wish", "Kswplayer", "Swhoi", "Multimovies", "Uqloads", "neko-stream", "swdyu", "iplayerhls", "streamgg"),
-        "doodstream" to listOf("doodstream", "dood.", "ds2play", "doods.", "ds2play", "ds2video", "dooood", "d000d", "d0000d"),
-        "streamlare" to listOf("streamlare", "slmaxed"),
-        "yourupload" to listOf("yourupload", "upload"),
-        "vidhide" to listOf("ahvsh", "streamhide", "guccihide", "streamvid", "vidhide", "kinoger", "smoothpre", "dhtpre", "peytonepre", "earnvids", "ryderjet"),
-    )
+    private val conventions =
+        listOf(
+            "voe" to
+                listOf(
+                    "voe",
+                    "tubelessceliolymph",
+                    "simpulumlamerop",
+                    "urochsunloath",
+                    "nathanfromsubject",
+                    "yip.",
+                    "metagnathtuggers",
+                    "donaldlineelse",
+                ),
+            "pixeldrain" to listOf("pixeldrain"),
+            "mp4upload" to listOf("mp4upload"),
+            "streamwish" to
+                listOf(
+                    "wishembed",
+                    "streamwish",
+                    "strwish",
+                    "wish",
+                    "kswplayer",
+                    "swhoi",
+                    "multimovies",
+                    "uqloads",
+                    "neko-stream",
+                    "swdyu",
+                    "iplayerhls",
+                    "streamgg",
+                ),
+            "filelions" to listOf("filelions", "lion", "fviplions"),
+            "yourupload" to listOf("yourupload", "upload"),
+            "vidhide" to
+                listOf(
+                    "streamhidevid",
+                    "ahvsh",
+                    "streamhide",
+                    "guccihide",
+                    "streamvid",
+                    "vidhide",
+                    "kinoger",
+                    "smoothpre",
+                    "dhtpre",
+                    "peytonepre",
+                    "earnvids",
+                    "ryderjet",
+                ),
+            "playerzilla" to listOf("player.zilla", "playerzilla", "zilla"),
+        )
 
-    override fun List<Video>.sort(): List<Video> {
-        val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
-        val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
-        val langPref = preferences.getString(PREF_LANG_KEY, PREF_LANG_DEFAULT)!!
-        return this.sortedWith(
+    private val serverDisplayNames =
+        mapOf(
+            "voe" to "Voe",
+            "pixeldrain" to "PixelDrain",
+            "mp4upload" to "Mp4Upload",
+            "streamwish" to "StreamWish",
+            "filelions" to "FileLions",
+            "yourupload" to "YourUpload",
+            "vidhide" to "StreamHideVid",
+            "playerzilla" to "HLS",
+        )
+
+    override fun List<Video>.sortVideos(): List<Video> {
+        val preferredQuality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT) ?: PREF_QUALITY_DEFAULT
+        val preferredServer = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT) ?: PREF_SERVER_DEFAULT
+        val preferredLang = preferences.getString(PREF_LANG_KEY, PREF_LANG_DEFAULT) ?: PREF_LANG_DEFAULT
+        val qualityRegex = Regex("""(\d+)p""", RegexOption.IGNORE_CASE)
+
+        fun Video.matchesLanguage(): Int =
+            if (preferredLang.isBlank()) {
+                0
+            } else if (videoTitle.contains(preferredLang, ignoreCase = true)) {
+                1
+            } else {
+                0
+            }
+
+        fun Video.matchesServer(): Int =
+            if (preferredServer.isBlank()) {
+                0
+            } else if (videoTitle.contains(preferredServer, ignoreCase = true)) {
+                1
+            } else {
+                0
+            }
+
+        fun Video.matchesQuality(): Int = if (videoTitle.contains(preferredQuality, ignoreCase = true)) 1 else 0
+
+        fun Video.displayResolution(): Int =
+            resolution ?: qualityRegex
+                .find(videoTitle)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull() ?: 0
+
+        return sortedWith(
             compareBy(
-                { it.quality.contains(langPref, true) },
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.matchesLanguage() },
+                { it.matchesServer() },
+                { it.matchesQuality() },
+                { it.displayResolution() },
             ),
         ).reversed()
     }
 
+    private fun displayServerName(serverSlug: String): String {
+        val canonical = canonicalServerSlug(serverSlug)
+        if (canonical.isBlank()) return "Unknown"
+        return serverDisplayNames[canonical] ?: canonical.replaceFirstChar { char ->
+            if (char.isLowerCase()) char.titlecase() else char.toString()
+        }
+    }
+
+    private fun canonicalServerSlug(serverSlug: String): String {
+        val lower = serverSlug.lowercase()
+        return conventions
+            .firstOrNull { (key, names) ->
+                key.equals(lower, true) ||
+                    lower.contains(key, ignoreCase = true) ||
+                    names.any { name ->
+                        name.equals(lower, true) || lower.contains(name, ignoreCase = true)
+                    }
+            }?.first ?: lower
+    }
+
+    private fun buildPrefix(
+        languageLabel: String,
+        serverName: String,
+    ): String =
+        sequenceOf(languageLabel, serverName)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(" ")
+
+    private fun String.withTrailingSpace(): String = if (isBlank()) "" else "$this "
+
+    private fun buildVideoName(
+        prefix: String,
+        detail: String,
+    ): String =
+        when {
+            prefix.isBlank() -> detail.trim()
+            detail.isBlank() -> prefix.trim()
+            else -> "$prefix ${detail.trim()}"
+        }
+
+    private fun languageLabel(languageTag: String): String = languageTag.takeIf { it.isNotBlank() }?.let { "[${it.uppercase()}]" } ?: ""
+
+    private data class HosterRequestEntry(
+        val languageTag: String,
+        val serverSlug: String,
+        val url: String,
+    )
+
+    private data class HosterEntry(
+        val languageTag: String,
+        val serverSlug: String,
+        val videos: List<Video>,
+    )
+
+    private data class HosterGroupMeta(
+        val index: Int,
+        val languageTag: String,
+        val serverDisplay: String,
+        val hoster: Hoster,
+    ) {
+        fun matchesLanguage(preferred: String): Int =
+            if (preferred.isBlank()) {
+                0
+            } else if (languageTag.equals(preferred, ignoreCase = true)) {
+                1
+            } else {
+                0
+            }
+
+        fun matchesServer(preferred: String): Int =
+            if (preferred.isBlank()) {
+                0
+            } else if (serverDisplay.equals(preferred, ignoreCase = true)) {
+                1
+            } else {
+                0
+            }
+    }
+
+    private fun String.toAbsoluteUrl(): String =
+        if (startsWith("http", true)) {
+            this
+        } else {
+            val separator = if (startsWith("/")) "" else "/"
+            "$baseUrl$separator$this"
+        }
+
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        ListPreference(screen.context).apply {
-            key = PREF_SERVER_KEY
-            title = "Preferred server"
-            entries = SERVER_LIST
-            entryValues = SERVER_LIST
-            setDefaultValue(PREF_SERVER_DEFAULT)
-            summary = "%s"
+        ListPreference(screen.context)
+            .apply {
+                key = PREF_SERVER_KEY
+                title = "Preferred server"
+                entries = SERVER_LIST
+                entryValues = SERVER_LIST
+                setDefaultValue(PREF_SERVER_DEFAULT)
+                summary = "%s"
 
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
+                setOnPreferenceChangeListener { _, newValue ->
+                    val selected = newValue as String
+                    val index = findIndexOfValue(selected)
+                    val entry = entryValues[index] as String
+                    preferences.edit().putString(key, entry).commit()
+                }
+            }.also(screen::addPreference)
 
-        ListPreference(screen.context).apply {
-            key = PREF_LANG_KEY
-            title = "Preferred Language"
-            entries = PREF_LANG_ENTRIES
-            entryValues = PREF_LANG_VALUES
-            setDefaultValue(PREF_LANG_DEFAULT)
-            summary = "%s"
+        ListPreference(screen.context)
+            .apply {
+                key = PREF_LANG_KEY
+                title = "Preferred Language"
+                entries = PREF_LANG_ENTRIES
+                entryValues = PREF_LANG_VALUES
+                setDefaultValue(PREF_LANG_DEFAULT)
+                summary = "%s"
 
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
+                setOnPreferenceChangeListener { _, newValue ->
+                    val selected = newValue as String
+                    val index = findIndexOfValue(selected)
+                    val entry = entryValues[index] as String
+                    preferences.edit().putString(key, entry).commit()
+                }
+            }.also(screen::addPreference)
 
-        ListPreference(screen.context).apply {
-            key = PREF_QUALITY_KEY
-            title = "Preferred quality"
-            entries = QUALITY_LIST
-            entryValues = QUALITY_LIST
-            setDefaultValue(PREF_QUALITY_DEFAULT)
-            summary = "%s"
+        ListPreference(screen.context)
+            .apply {
+                key = PREF_QUALITY_KEY
+                title = "Preferred quality"
+                entries = QUALITY_LIST
+                entryValues = QUALITY_LIST
+                setDefaultValue(PREF_QUALITY_DEFAULT)
+                summary = "%s"
 
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
+                setOnPreferenceChangeListener { _, newValue ->
+                    val selected = newValue as String
+                    val index = findIndexOfValue(selected)
+                    val entry = entryValues[index] as String
+                    preferences.edit().putString(key, entry).commit()
+                }
+            }.also(screen::addPreference)
     }
 }
