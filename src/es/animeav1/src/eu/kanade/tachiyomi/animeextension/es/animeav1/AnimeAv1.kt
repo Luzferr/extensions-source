@@ -66,8 +66,8 @@ class AnimeAv1 :
             )
     }
 
-    private val languageSectionRegex = Regex("""([A-Z]+)\s*:\s*\[(.*?)\]""", setOf(RegexOption.DOT_MATCHES_ALL))
-    private val serverEntryRegex = Regex("""server\s*:\s*['\"]([^'\"]+)['\"]\s*,\s*url\s*:\s*['\"]([^'\"]+)['\"]""")
+    private val languageSectionRegex = Regex("""([A-Z]+)\s*:\s*\[(.*?)]""", setOf(RegexOption.DOT_MATCHES_ALL))
+    private val serverEntryRegex = Regex("""server\s*:\s*['"]([^'"]+)['"]\s*,\s*url\s*:\s*['"]([^'"]+)['"]""")
 
     override fun animeDetailsParse(response: Response): SAnime {
         val doc = response.asJsoup()
@@ -141,6 +141,12 @@ class AnimeAv1 :
     override fun episodeListParse(response: Response): List<SEpisode> {
         val doc = response.asJsoup()
         val script = doc.selectFirst("script:containsData(node_ids)")?.data().orEmpty()
+
+        val mediaIdRegex = """media\s*:\s*\{\s*id\s*:\s*(\d+)""".toRegex()
+        val mediaId = mediaIdRegex.find(script)?.groupValues?.get(1)
+        val cdnUrlRegex = """PUBLIC_CDN_URL\s*[:=]\s*['"](https?://[^'"]+)['"]""".toRegex()
+        val cdnUrl = cdnUrlRegex.find(script)?.groupValues?.get(1) ?: "https://cdn.animeav1.com"
+
         val episodeListRegex = """episodes\s*:\s*\[([^\]]*)\]""".toRegex()
         val episodeRegex = """\{\s*id\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*number\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*\}""".toRegex()
         val episodes =
@@ -151,9 +157,18 @@ class AnimeAv1 :
                         .findAll(it.groupValues[1])
                         .map { match ->
                             val number = match.groupValues[2]
+                            val episodeNumber = number.toFloatOrNull() ?: 0F
+                            val imageUrl =
+                                if (mediaId != null) {
+                                    "$cdnUrl/screenshots/$mediaId/${number.toInt()}.jpg"
+                                } else {
+                                    null
+                                }
+
                             SEpisode.create().apply {
                                 name = "Episodio $number"
-                                episode_number = number.toFloatOrNull() ?: 0F
+                                episode_number = episodeNumber
+                                imageUrl?.let { preview_url = it }
                                 setUrlWithoutDomain("${doc.location().removeSuffix("/")}/$number")
                             }
                         }.toList()
@@ -261,11 +276,23 @@ class AnimeAv1 :
         serverName: String? = "",
     ): List<Video> =
         runCatching {
-            val source = serverName?.ifEmpty { url } ?: url
-            val matched = canonicalServerSlug(source)
-            val serverDisplay = displayServerName(matched)
-            val prefixBase = buildPrefix(prefix, serverDisplay)
+            val matched =
+                if (!serverName.isNullOrBlank()) {
+                    canonicalServerSlug(serverName)
+                } else {
+                    conventions
+                        .firstNotNullOfOrNull { (key, names) ->
+                            if (names.any { name -> url.contains(name, ignoreCase = true) }) {
+                                key
+                            } else {
+                                null
+                            }
+                        } ?: ""
+                }
+
+            val prefixBase = buildPrefix(prefix, displayServerName(matched))
             val prefixWithSpace = prefixBase.withTrailingSpace()
+
             when (matched) {
                 "voe" -> {
                     voeExtractor.videosFromUrl(url, prefixWithSpace)
@@ -316,11 +343,12 @@ class AnimeAv1 :
                     "simpulumlamerop",
                     "urochsunloath",
                     "nathanfromsubject",
+                    "nathanfromsubject",
                     "yip.",
                     "metagnathtuggers",
                     "donaldlineelse",
                 ),
-            "pixeldrain" to listOf("pixeldrain"),
+            "pixeldrain" to listOf("pixeldrain", "PDrain", "pixeldr"),
             "mp4upload" to listOf("mp4upload"),
             "streamwish" to
                 listOf(
@@ -354,7 +382,7 @@ class AnimeAv1 :
                     "earnvids",
                     "ryderjet",
                 ),
-            "playerzilla" to listOf("player.zilla", "playerzilla", "zilla"),
+            "playerzilla" to listOf("player.zilla", "playerzilla", "zilla-networks", "zilla", "hls"),
         )
 
     private val serverDisplayNames =
@@ -492,6 +520,7 @@ class AnimeAv1 :
             }
     }
 
+    // Funciones auxiliares simplificadas
     private fun String.toAbsoluteUrl(): String =
         if (startsWith("http", true)) {
             this
