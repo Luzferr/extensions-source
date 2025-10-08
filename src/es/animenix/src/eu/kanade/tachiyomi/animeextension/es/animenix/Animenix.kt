@@ -4,6 +4,8 @@ import androidx.preference.CheckBoxPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
+import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.lib.filemoonextractor.FilemoonExtractor
 import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
@@ -36,13 +38,21 @@ class Animenix : DooPlay(
     // ============================== Episodes ==============================
     override val episodeMovieText = "Película"
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val players = response.asJsoup().select("li.dooplay_player_option")
-        return players.flatMap { player ->
+        val videoList = players.flatMap { player ->
             runCatching {
                 val link = getPlayerUrl(player)
                 getPlayerVideos(link)
             }.getOrElse { emptyList() }
+        }
+
+        val hosterMap = videoList.groupBy { video ->
+            video.videoTitle.substringBefore(":").trim()
+        }
+
+        return hosterMap.map { (name, videos) ->
+            Hoster(hosterName = name, videoList = videos)
         }
     }
 
@@ -90,6 +100,9 @@ class Animenix : DooPlay(
     override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/ver/page/$page", headers)
 
     override fun latestUpdatesNextPageSelector() = "div.pagination > *:last-child:not(span):not(.current)"
+
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+    override fun seasonFromElement(element: Element): SAnime =  throw UnsupportedOperationException()
 
     // =============================== Search ===============================
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
@@ -186,13 +199,13 @@ class Animenix : DooPlay(
     // ============================= Utilities ==============================
     override fun String.toDate() = 0L
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(prefQualityKey, prefQualityDefault)!!
         val lang = preferences.getString(PREF_LANG_KEY, PREF_LANG_DEFAULT)!!
         return sortedWith(
             compareBy(
-                { it.quality.contains(lang) },
-                { it.quality.contains(quality) },
+                { it.videoTitle.contains(lang) },
+                { it.videoTitle.contains(quality) },
             ),
         ).reversed()
     }
