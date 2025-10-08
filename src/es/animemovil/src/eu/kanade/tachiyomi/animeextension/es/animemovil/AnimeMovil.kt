@@ -108,7 +108,6 @@ class AnimeMovil :
                             "En emision" -> SAnime.ONGOING
                             else -> SAnime.UNKNOWN
                         }
-                    fetch_type = FetchType.Episodes
                 }
             }
         return AnimesPage(animeList, nextPage)
@@ -165,7 +164,6 @@ class AnimeMovil :
                     "En emision" -> SAnime.ONGOING
                     else -> SAnime.UNKNOWN
                 }
-            fetch_type = FetchType.Episodes
         }
     }
 
