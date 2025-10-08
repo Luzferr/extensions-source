@@ -9,6 +9,8 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.FetchType
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -41,8 +43,9 @@ import uy.kohesive.injekt.injectLazy
 import java.io.UnsupportedEncodingException
 import java.net.URLEncoder
 
-class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
-
+class AnimeMovil :
+    AnimeHttpSource(),
+    ConfigurableAnimeSource {
     override val name = "AnimeMovil"
 
     override val baseUrl = "https://animemeow.xyz"
@@ -64,12 +67,27 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
 
         private const val PREF_SERVER_KEY = "preferred_server"
         private const val PREF_SERVER_DEFAULT = "Voe"
-        private val SERVER_LIST = arrayOf(
-            "PlusTube", "PlusVid", "PlusIm", "PlusWish", "PlusHub", "PlusDex",
-            "YourUpload", "Voe", "StreamWish", "Mp4Upload", "Doodstream",
-            "Uqload", "BurstCloud", "Upstream", "StreamTape", "PlusFilm",
-            "Fastream", "FileLions",
-        )
+        private val SERVER_LIST =
+            arrayOf(
+                "PlusTube",
+                "PlusVid",
+                "PlusIm",
+                "PlusWish",
+                "PlusHub",
+                "PlusDex",
+                "YourUpload",
+                "Voe",
+                "StreamWish",
+                "Mp4Upload",
+                "Doodstream",
+                "Uqload",
+                "BurstCloud",
+                "Upstream",
+                "StreamTape",
+                "PlusFilm",
+                "Fastream",
+                "FileLions",
+            )
     }
 
     override fun popularAnimeRequest(page: Int) = GET("$baseUrl/directorio/?p=$page", headers)
@@ -78,18 +96,21 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
         val document = response.asJsoup()
         val elements = document.select(".grid-animes article")
         val nextPage = document.select(".pagination .right:not(.disabledd) .page-link").any()
-        val animeList = elements.map { element ->
-            SAnime.create().apply {
-                setUrlWithoutDomain(element.selectFirst("a")?.attr("abs:href") ?: "")
-                title = element.selectFirst("a > p")?.text() ?: ""
-                thumbnail_url = element.selectFirst("a .main-img img")?.attr("abs:src") ?: ""
-                status = when (element.select("a .figure-title > p").text().trim()) {
-                    "Finalizado" -> SAnime.COMPLETED
-                    "En emision" -> SAnime.ONGOING
-                    else -> SAnime.UNKNOWN
+        val animeList =
+            elements.map { element ->
+                SAnime.create().apply {
+                    setUrlWithoutDomain(element.selectFirst("a")?.attr("abs:href") ?: "")
+                    title = element.selectFirst("a > p")?.text() ?: ""
+                    thumbnail_url = element.selectFirst("a .main-img img")?.attr("abs:src") ?: ""
+                    status =
+                        when (element.select("a .figure-title > p").text().trim()) {
+                            "Finalizado" -> SAnime.COMPLETED
+                            "En emision" -> SAnime.ONGOING
+                            else -> SAnime.UNKNOWN
+                        }
+                    fetch_type = FetchType.Episodes
                 }
             }
-        }
         return AnimesPage(animeList, nextPage)
     }
 
@@ -97,7 +118,11 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
 
     override fun latestUpdatesParse(response: Response) = popularAnimeParse(response)
 
-    override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
+    override fun searchAnimeRequest(
+        page: Int,
+        query: String,
+        filters: AnimeFilterList,
+    ): Request {
         val filterList = if (filters.isEmpty()) getFilterList() else filters
         val genreFilter = filterList.find { it is GenreFilter } as GenreFilter
         val statusFilter = filterList.find { it is StatusFilter } as StatusFilter
@@ -134,11 +159,13 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
             description = document.select("#sinopsis").text()
             thumbnail_url = document.selectFirst("#anime_image")?.attr("abs:src")
             genre = document.select(".generos-wrap .item").joinToString { it.text() }
-            status = when (document.select(".banner-img .estado").text().trim()) {
-                "Finalizado" -> SAnime.COMPLETED
-                "En emision" -> SAnime.ONGOING
-                else -> SAnime.UNKNOWN
-            }
+            status =
+                when (document.select(".banner-img .estado").text().trim()) {
+                    "Finalizado" -> SAnime.COMPLETED
+                    "En emision" -> SAnime.ONGOING
+                    else -> SAnime.UNKNOWN
+                }
+            fetch_type = FetchType.Episodes
         }
     }
 
@@ -147,35 +174,45 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
         val document = response.asJsoup()
         val seasons = document.select(".temporadas-lista .btn-temporada")
         if (seasons.any()) {
-            val token = try {
-                response.headers.first { it.first == "set-cookie" && it.second.startsWith("csrftoken") }
-                    .second.substringAfter("=").substringBefore(";").replace("%3D", "=")
-            } catch (_: Exception) { "" }
+            val token =
+                try {
+                    response.headers
+                        .first { it.first == "set-cookie" && it.second.startsWith("csrftoken") }
+                        .second
+                        .substringAfter("=")
+                        .substringBefore(";")
+                        .replace("%3D", "=")
+                } catch (_: Exception) {
+                    ""
+                }
             seasons.reversed().map {
                 val sid = it.attr("data-sid")
                 val t = it.attr("data-t")
 
                 val mediaType = "application/json".toMediaType()
                 val requestBody = "{\"show\": \"$sid\",\"temporada\": \"$t\"}"
-                val request = Request.Builder()
-                    .url("https://animemeow.xyz/api/obtener_episodios_x_temporada/")
-                    .post(requestBody.toRequestBody(mediaType))
-                    .header("authority", response.request.url.host)
-                    .header("origin", "https://${response.request.url.host}")
-                    .header("referer", response.request.url.toString())
-                    .header("x-csrftoken", token)
-                    .header("x-requested-with", "XMLHttpRequest")
-                    .header("cookie", "csrftoken=$token")
-                    .header("Content-Type", "application/json")
-                    .build()
+                val request =
+                    Request
+                        .Builder()
+                        .url("https://animemeow.xyz/api/obtener_episodios_x_temporada/")
+                        .post(requestBody.toRequestBody(mediaType))
+                        .header("authority", response.request.url.host)
+                        .header("origin", "https://${response.request.url.host}")
+                        .header("referer", response.request.url.toString())
+                        .header("x-csrftoken", token)
+                        .header("x-requested-with", "XMLHttpRequest")
+                        .header("cookie", "csrftoken=$token")
+                        .header("Content-Type", "application/json")
+                        .build()
 
                 client.newCall(request).execute().asJsoup().let {
                     json.decodeFromString<EpisodesDto>(it.body().text()).episodios.forEachIndexed { idx, it ->
-                        val episode = SEpisode.create().apply {
-                            setUrlWithoutDomain(it.url)
-                            name = "T$t - " + it.epNombre.replace("Ver", "").trim()
-                            episode_number = idx.toFloat()
-                        }
+                        val episode =
+                            SEpisode.create().apply {
+                                setUrlWithoutDomain(it.url)
+                                name = "T$t - " + it.epNombre.replace("Ver", "").trim()
+                                episode_number = idx.toFloat()
+                            }
                         episodes.add(episode)
                     }
                 }
@@ -183,16 +220,19 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
         } else {
             document.select("#eps li > a").reversed().forEachIndexed { idx, it ->
                 val nameEp = it.selectFirst("p")?.ownText() ?: ""
-                val episode = SEpisode.create().apply {
-                    setUrlWithoutDomain(it.attr("abs:href"))
-                    name = nameEp.replace("Ver", "").trim()
-                    episode_number = idx.toFloat()
-                }
+                val episode =
+                    SEpisode.create().apply {
+                        setUrlWithoutDomain(it.attr("abs:href"))
+                        name = nameEp.replace("Ver", "").trim()
+                        episode_number = idx.toFloat()
+                    }
                 episodes.add(episode)
             }
         }
         return episodes
     }
+
+    override fun seasonListParse(response: Response) = throw UnsupportedOperationException()
 
     private fun fetchUrls(text: String?): List<String> {
         if (text.isNullOrEmpty()) return listOf()
@@ -200,7 +240,7 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
         return linkRegex.findAll(text).map { it.value.trim().removeSurrounding("\"") }.toList()
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
         val videoList = mutableListOf<Video>()
         document.select("#fuentes button").forEach {
@@ -214,10 +254,26 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
                     if (genericFiles.any()) {
                         genericFiles.forEach { fileSrc ->
                             if (fileSrc.contains(".m3u8")) {
-                                videoList.add(Video(fileSrc, "$serverName:HLS", fileSrc, headers = null))
+                                videoList.add(
+                                    Video(
+                                        videoTitle = "$serverName:HLS",
+                                        videoUrl = fileSrc,
+                                        headers = null,
+                                        subtitleTracks = emptyList(),
+                                        audioTracks = emptyList(),
+                                    ),
+                                )
                             }
                             if (fileSrc.contains(".mp4")) {
-                                videoList.add(Video(fileSrc, "$serverName:MP4", fileSrc, headers = null))
+                                videoList.add(
+                                    Video(
+                                        videoTitle = "$serverName:MP4",
+                                        videoUrl = fileSrc,
+                                        headers = null,
+                                        subtitleTracks = emptyList(),
+                                        audioTracks = emptyList(),
+                                    ),
+                                )
                             }
                         }
                     } else {
@@ -226,9 +282,18 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
                 } else {
                     serverVideoResolver(url).let { videoList.addAll(it) }
                 }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
-        return videoList
+
+        val hosterMap =
+            videoList.groupBy { video ->
+                video.videoTitle.substringBefore(":").trim()
+            }
+
+        return hosterMap.map { (name, videos) ->
+            Hoster(hosterName = name, videoList = videos)
+        }
     }
 
     private fun serverVideoResolver(url: String): List<Video> {
@@ -239,46 +304,61 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
                 embedUrl.contains("voe") -> {
                     VoeExtractor(client, headers).videosFromUrl(url).also(videoList::addAll)
                 }
+
                 embedUrl.contains("filemoon") || embedUrl.contains("moonplayer") -> {
                     FilemoonExtractor(client).videosFromUrl(url, prefix = "Filemoon:").also(videoList::addAll)
                 }
+
                 embedUrl.contains("uqload") -> {
                     UqloadExtractor(client).videosFromUrl(url).also(videoList::addAll)
                 }
+
                 embedUrl.contains("mp4upload") -> {
                     val newHeaders = headers.newBuilder().add("referer", "https://re.animepelix.net/").build()
                     Mp4uploadExtractor(client).videosFromUrl(url, newHeaders).also(videoList::addAll)
                 }
+
                 embedUrl.contains("wishembed") || embedUrl.contains("streamwish") || embedUrl.contains("wish") -> {
-                    val docHeaders = headers.newBuilder()
-                        .add("Referer", "$baseUrl/")
-                        .build()
+                    val docHeaders =
+                        headers
+                            .newBuilder()
+                            .add("Referer", "$baseUrl/")
+                            .build()
                     StreamWishExtractor(client, docHeaders).videosFromUrl(url, videoNameGen = { "StreamWish:$it" }).also(videoList::addAll)
                 }
+
                 embedUrl.contains("doodstream") || embedUrl.contains("dood.") -> {
                     DoodExtractor(client).videosFromUrl(url, "DoodStream").also(videoList::addAll)
                 }
+
                 embedUrl.contains("streamlare") -> {
                     StreamlareExtractor(client).videosFromUrl(url).also(videoList::addAll)
                 }
+
                 embedUrl.contains("yourupload") -> {
                     YourUploadExtractor(client).videoFromUrl(url, headers = headers).also(videoList::addAll)
                 }
+
                 embedUrl.contains("burstcloud") || embedUrl.contains("burst") -> {
                     BurstCloudExtractor(client).videoFromUrl(url, headers = headers).also(videoList::addAll)
                 }
+
                 embedUrl.contains("fastream") -> {
                     FastreamExtractor(client, headers).videosFromUrl(url).also(videoList::addAll)
                 }
+
                 embedUrl.contains("upstream") -> {
                     UpstreamExtractor(client).videosFromUrl(url).also(videoList::addAll)
                 }
+
                 embedUrl.contains("streamtape") -> {
                     StreamTapeExtractor(client).videosFromUrl(url).also(videoList::addAll)
                 }
+
                 embedUrl.contains("filelions") || embedUrl.contains("lion") -> {
                     StreamWishExtractor(client, headers).videosFromUrl(url, videoNameGen = { "FileLions:$it" }).also(videoList::addAll)
                 }
+
                 else -> {
                     UniversalExtractor(client).videosFromUrl(url, headers).also(videoList::addAll)
                 }
@@ -289,162 +369,178 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
         return videoList
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
-        return this.sortedWith(
-            compareBy(
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
-            ),
-        ).reversed()
+        return this
+            .sortedWith(
+                compareBy(
+                    { it.videoTitle.contains(server, true) },
+                    { it.videoTitle.contains(quality) },
+                    {
+                        Regex("""(\d+)p""")
+                            .find(it.videoTitle)
+                            ?.groupValues
+                            ?.get(1)
+                            ?.toIntOrNull() ?: 0
+                    },
+                ),
+            ).reversed()
     }
 
-    override fun getFilterList(): AnimeFilterList = AnimeFilterList(
-        AnimeFilter.Header("La busqueda por texto ignora el filtro"),
-        GenreFilter(),
-        TypeFilter(),
-        StatusFilter(),
-        LanguageFilter(),
-    )
+    override fun getFilterList(): AnimeFilterList =
+        AnimeFilterList(
+            AnimeFilter.Header("La busqueda por texto ignora el filtro"),
+            GenreFilter(),
+            TypeFilter(),
+            StatusFilter(),
+            LanguageFilter(),
+        )
 
-    private class GenreFilter : UriPartFilter(
-        "Géneros",
-        arrayOf(
-            Pair("Seleccionar", ""),
-            Pair("Acción", "1"),
-            Pair("Escolares", "2"),
-            Pair("Romance", "3"),
-            Pair("Shoujo", "4"),
-            Pair("Comedia", "5"),
-            Pair("Drama", "6"),
-            Pair("Seinen", "7"),
-            Pair("Deportes", "8"),
-            Pair("Shounen", "9"),
-            Pair("Recuentos de la vida", "10"),
-            Pair("Ecchi", "11"),
-            Pair("Sobrenatural", "12"),
-            Pair("Fantasía", "13"),
-            Pair("Magia", "14"),
-            Pair("Superpoderes", "15"),
-            Pair("Demencia", "16"),
-            Pair("Misterio", "17"),
-            Pair("Psicológico", "18"),
-            Pair("Suspenso", "19"),
-            Pair("Ciencia Ficción", "20"),
-            Pair("Mecha", "21"),
-            Pair("Militar", "22"),
-            Pair("Aventuras", "23"),
-            Pair("Historico", "24"),
-            Pair("Infantil", "25"),
-            Pair("Artes Marciales", "26"),
-            Pair("Terror", "27"),
-            Pair("Harem", "28"),
-            Pair("Josei", "29"),
-            Pair("Parodia", "30"),
-            Pair("Policía", "31"),
-            Pair("Juegos", "32"),
-            Pair("Carreras", "33"),
-            Pair("Samurai", "34"),
-            Pair("Espacial", "35"),
-            Pair("Música", "36"),
-            Pair("Yuri", "37"),
-            Pair("Demonios", "38"),
-            Pair("Vampiros", "39"),
-            Pair("Yaoi", "40"),
-            Pair("Humor Negro", "41"),
-            Pair("Crimen", "42"),
-            Pair("Hentai", "43"),
-            Pair("Youtuber", "44"),
-            Pair("MaiNess Random", "45"),
-            Pair("Donghua", "46"),
-            Pair("Horror", "47"),
-            Pair("Sin Censura", "48"),
-            Pair("Gore", "49"),
-            Pair("Live Action", "50"),
-            Pair("Isekai", "51"),
-            Pair("Gourmet", "52"),
-            Pair("spokon", "53"),
-            Pair("Zombies", "54"),
-        ),
-    )
+    private class GenreFilter :
+        UriPartFilter(
+            "Géneros",
+            arrayOf(
+                Pair("Seleccionar", ""),
+                Pair("Acción", "1"),
+                Pair("Escolares", "2"),
+                Pair("Romance", "3"),
+                Pair("Shoujo", "4"),
+                Pair("Comedia", "5"),
+                Pair("Drama", "6"),
+                Pair("Seinen", "7"),
+                Pair("Deportes", "8"),
+                Pair("Shounen", "9"),
+                Pair("Recuentos de la vida", "10"),
+                Pair("Ecchi", "11"),
+                Pair("Sobrenatural", "12"),
+                Pair("Fantasía", "13"),
+                Pair("Magia", "14"),
+                Pair("Superpoderes", "15"),
+                Pair("Demencia", "16"),
+                Pair("Misterio", "17"),
+                Pair("Psicológico", "18"),
+                Pair("Suspenso", "19"),
+                Pair("Ciencia Ficción", "20"),
+                Pair("Mecha", "21"),
+                Pair("Militar", "22"),
+                Pair("Aventuras", "23"),
+                Pair("Historico", "24"),
+                Pair("Infantil", "25"),
+                Pair("Artes Marciales", "26"),
+                Pair("Terror", "27"),
+                Pair("Harem", "28"),
+                Pair("Josei", "29"),
+                Pair("Parodia", "30"),
+                Pair("Policía", "31"),
+                Pair("Juegos", "32"),
+                Pair("Carreras", "33"),
+                Pair("Samurai", "34"),
+                Pair("Espacial", "35"),
+                Pair("Música", "36"),
+                Pair("Yuri", "37"),
+                Pair("Demonios", "38"),
+                Pair("Vampiros", "39"),
+                Pair("Yaoi", "40"),
+                Pair("Humor Negro", "41"),
+                Pair("Crimen", "42"),
+                Pair("Hentai", "43"),
+                Pair("Youtuber", "44"),
+                Pair("MaiNess Random", "45"),
+                Pair("Donghua", "46"),
+                Pair("Horror", "47"),
+                Pair("Sin Censura", "48"),
+                Pair("Gore", "49"),
+                Pair("Live Action", "50"),
+                Pair("Isekai", "51"),
+                Pair("Gourmet", "52"),
+                Pair("spokon", "53"),
+                Pair("Zombies", "54"),
+            ),
+        )
 
-    private class TypeFilter : UriPartFilter(
-        "Tipos",
-        arrayOf(
-            Pair("Seleccionar", ""),
-            Pair("TV", "1"),
-            Pair("Película", "2"),
-            Pair("OVA", "3"),
-            Pair("Especial", "4"),
-            Pair("Serie", "9"),
-            Pair("Dorama", "11"),
-            Pair("Corto", "14"),
-            Pair("Donghua", "15"),
-            Pair("ONA", "16"),
-            Pair("Live Action", "17"),
-            Pair("Manhwa", "18"),
-            Pair("Teatral", "19"),
-        ),
-    )
+    private class TypeFilter :
+        UriPartFilter(
+            "Tipos",
+            arrayOf(
+                Pair("Seleccionar", ""),
+                Pair("TV", "1"),
+                Pair("Película", "2"),
+                Pair("OVA", "3"),
+                Pair("Especial", "4"),
+                Pair("Serie", "9"),
+                Pair("Dorama", "11"),
+                Pair("Corto", "14"),
+                Pair("Donghua", "15"),
+                Pair("ONA", "16"),
+                Pair("Live Action", "17"),
+                Pair("Manhwa", "18"),
+                Pair("Teatral", "19"),
+            ),
+        )
 
-    private class StatusFilter : UriPartFilter(
-        "Estados",
-        arrayOf(
-            Pair("Seleccionar", ""),
-            Pair("Finalizado", "1"),
-            Pair("En emision", "2"),
-            Pair("Proximamente", "3"),
-        ),
-    )
+    private class StatusFilter :
+        UriPartFilter(
+            "Estados",
+            arrayOf(
+                Pair("Seleccionar", ""),
+                Pair("Finalizado", "1"),
+                Pair("En emision", "2"),
+                Pair("Proximamente", "3"),
+            ),
+        )
 
-    private class LanguageFilter : UriPartFilter(
-        "Idioma",
-        arrayOf(
-            Pair("Seleccionar", ""),
-            Pair("Japonés", "1"),
-            Pair("Latino", "2"),
-        ),
-    )
+    private class LanguageFilter :
+        UriPartFilter(
+            "Idioma",
+            arrayOf(
+                Pair("Seleccionar", ""),
+                Pair("Japonés", "1"),
+                Pair("Latino", "2"),
+            ),
+        )
 
-    private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) :
-        AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
+    private open class UriPartFilter(
+        displayName: String,
+        val vals: Array<Pair<String, String>>,
+    ) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
         fun toUriPart() = vals[state].second
     }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        ListPreference(screen.context).apply {
-            key = PREF_QUALITY_KEY
-            title = "Preferred quality"
-            entries = QUALITY_LIST
-            entryValues = QUALITY_LIST
-            setDefaultValue(PREF_QUALITY_DEFAULT)
-            summary = "%s"
+        ListPreference(screen.context)
+            .apply {
+                key = PREF_QUALITY_KEY
+                title = "Preferred quality"
+                entries = QUALITY_LIST
+                entryValues = QUALITY_LIST
+                setDefaultValue(PREF_QUALITY_DEFAULT)
+                summary = "%s"
 
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
+                setOnPreferenceChangeListener { _, newValue ->
+                    val selected = newValue as String
+                    val index = findIndexOfValue(selected)
+                    val entry = entryValues[index] as String
+                    preferences.edit().putString(key, entry).commit()
+                }
+            }.also(screen::addPreference)
 
-        ListPreference(screen.context).apply {
-            key = PREF_SERVER_KEY
-            title = "Preferred server"
-            entries = SERVER_LIST
-            entryValues = SERVER_LIST
-            setDefaultValue(PREF_SERVER_DEFAULT)
-            summary = "%s"
+        ListPreference(screen.context)
+            .apply {
+                key = PREF_SERVER_KEY
+                title = "Preferred server"
+                entries = SERVER_LIST
+                entryValues = SERVER_LIST
+                setDefaultValue(PREF_SERVER_DEFAULT)
+                summary = "%s"
 
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
+                setOnPreferenceChangeListener { _, newValue ->
+                    val selected = newValue as String
+                    val index = findIndexOfValue(selected)
+                    val entry = entryValues[index] as String
+                    preferences.edit().putString(key, entry).commit()
+                }
+            }.also(screen::addPreference)
     }
 
     @Serializable
@@ -461,13 +557,12 @@ class AnimeMovil : ConfigurableAnimeSource, AnimeHttpSource() {
         val url: String,
     )
 
-    private fun urlEncodeUTF8(s: String?): String? {
-        return try {
+    private fun urlEncodeUTF8(s: String?): String? =
+        try {
             URLEncoder.encode(s, "UTF-8")
         } catch (e: UnsupportedEncodingException) {
             throw UnsupportedOperationException()
         }
-    }
 
     private fun urlEncodeUTF8(map: Map<*, *>): String? {
         val sb = StringBuilder()
