@@ -57,7 +57,6 @@ class AnimeBum :
                     // Extraer la imagen
                     val imageElement = element.selectFirst("figure.image img")
                     thumbnail_url = imageElement?.attr("src") ?: ""
-                    fetch_type = FetchType.Episodes
                 }
             }
         val hasNextPage = document.select("ul.pagination li a[rel=next]").firstOrNull() != null
@@ -102,7 +101,6 @@ class AnimeBum :
                     val descriptionElement = element.selectFirst("div.search-results__left div.description")
                     description = descriptionElement?.text().orEmpty()
 
-                    fetch_type = FetchType.Episodes
                 }
             }
         val hasNextPage = document.select("a.next.page-numbers").firstOrNull() != null
@@ -130,7 +128,6 @@ class AnimeBum :
 
         val genresElement = document.select("div.boom-categories a")
         anime.genre = genresElement.joinToString(", ") { it.text() }
-        anime.fetch_type = FetchType.Episodes
 
         return anime
     }
@@ -174,13 +171,14 @@ class AnimeBum :
 
     override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
-        val videoList = mutableListOf<Video>()
         val scriptContent =
             document.select("script:containsData(var video = [])").firstOrNull()?.data()
                 ?: return emptyList()
 
         val iframeRegex = """video\[\d+\]\s*=\s*['"]<iframe[^>]+src=["']([^"']+)["']""".toRegex()
         val matches = iframeRegex.findAll(scriptContent)
+
+        val hosterMap = mutableMapOf<String, MutableList<Video>>()
 
         for (match in matches) {
             var videoUrl = match.groupValues[1]
@@ -191,44 +189,42 @@ class AnimeBum :
 
             val vidHideDomains = listOf("vidhide", "VidHidePro", "luluvdo", "vidhideplus")
 
-            val video =
+            val (serverName, videos) =
                 when {
                     vidHideDomains.any { videoUrl.contains(it, ignoreCase = true) } -> {
-                        vidHideExtractor.videosFromUrl(videoUrl)
+                        "StreamHideVid" to vidHideExtractor.videosFromUrl(videoUrl)
                     }
 
                     "drive.google" in videoUrl -> {
                         val newUrl = "https://gdriveplayer.to/embed2.php?link=$videoUrl"
                         Log.d("AnimeBum", "New URL: $newUrl")
-                        gdrivePlayerExtractor.videosFromUrl(newUrl, "GdrivePlayer", headers)
+                        "GdrivePlayer" to gdrivePlayerExtractor.videosFromUrl(newUrl, "GdrivePlayer", headers)
                     }
 
                     videoUrl.contains("streamwish") -> {
-                        streamWishExtractor.videosFromUrl(videoUrl)
+                        "StreamWish" to streamWishExtractor.videosFromUrl(videoUrl)
                     }
 
                     videoUrl.contains("ok.ru") -> {
-                        okruExtractor.videosFromUrl(videoUrl)
+                        "Okru" to okruExtractor.videosFromUrl(videoUrl)
                     }
 
                     videoUrl.contains("listeamed") -> {
-                        vidGuardExtractor.videosFromUrl(videoUrl)
+                        "VidGuard" to vidGuardExtractor.videosFromUrl(videoUrl)
                     }
 
-                    else -> {
-                        emptyList()
-                    }
+                    else -> continue
                 }
-            videoList.addAll(video)
+
+            hosterMap.getOrPut(serverName) { mutableListOf() }.addAll(videos)
         }
 
-        val sortedVideos = videoList.sortVideos()
-        return listOf(
+        return hosterMap.map { (serverName, videos) ->
             Hoster(
-                hosterName = "Multi",
-                videoList = sortedVideos,
-            ),
-        )
+                hosterName = serverName,
+                videoList = videos.sortVideos(),
+            )
+        }
     }
 
     // ============================ Video Extractor ==========================

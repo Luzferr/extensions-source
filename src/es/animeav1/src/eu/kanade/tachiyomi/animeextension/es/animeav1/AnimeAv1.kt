@@ -7,7 +7,6 @@ import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
-import eu.kanade.tachiyomi.animesource.model.FetchType
 import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
@@ -77,7 +76,6 @@ class AnimeAv1 :
                 description = doc.selectFirst(".entry > p")?.text()
                 genre = doc.select("header > .items-center > a").joinToString { it.text() }
                 thumbnail_url = doc.selectFirst("img.object-cover")?.attr("src")
-                fetch_type = FetchType.Episodes
             }
         doc.select("header > .items-center.text-sm span").eachText().forEach {
             when {
@@ -100,7 +98,6 @@ class AnimeAv1 :
                     setUrlWithoutDomain(element.selectFirst("a")?.attr("abs:href").orEmpty())
                     title = element.select("header h3").text()
                     thumbnail_url = element.selectFirst(".bg-current img")?.attr("abs:src")
-                    fetch_type = FetchType.Episodes
                 }
             }
         return AnimesPage(animeList, nextPage)

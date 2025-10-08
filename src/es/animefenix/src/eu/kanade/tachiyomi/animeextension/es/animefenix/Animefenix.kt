@@ -90,7 +90,6 @@ class Animefenix :
                 description = document.selectFirst(".mb-6 p.text-gray-300")?.text()
                 genre = document.select(".flex-wrap a").joinToString { it.text().trim() }
                 thumbnail_url = document.selectFirst("#anime_image")?.getImageUrl()
-                fetch_type = FetchType.Episodes
             }
         return animeDetails
     }
@@ -107,7 +106,6 @@ class Animefenix :
                     setUrlWithoutDomain(element.attr("abs:href"))
                     title = element.selectFirst("p:not(.gray)")?.text() ?: ""
                     thumbnail_url = element.selectFirst(".main-img img")?.getImageUrl()
-                    fetch_type = FetchType.Episodes
                 }
             }
         return AnimesPage(animeList, nextPage)
@@ -150,23 +148,31 @@ class Animefenix :
     override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
         val script = document.selectFirst("script:containsData(var tabsArray)") ?: return emptyList()
-        val videoList =
-            script
-                .data()
-                .substringAfter("<iframe")
-                .split("src='")
-                .map { it.substringBefore("'").substringAfter("redirect.php?id=").trim() }
-                .parallelCatchingFlatMapBlocking { url ->
-                    serverVideoResolver(url)
-                }
 
-        val sortedVideos = videoList.sortVideos()
-        return listOf(
+        val hosterMap = mutableMapOf<String, MutableList<Video>>()
+
+        script
+            .data()
+            .substringAfter("<iframe")
+            .split("src='")
+            .map { it.substringBefore("'").substringAfter("redirect.php?id=").trim() }
+            .forEach { url ->
+                if (url.isNotEmpty()) {
+                    val videos = serverVideoResolver(url)
+                    if (videos.isNotEmpty()) {
+                        val serverName = videos.firstOrNull()?.videoTitle?.substringBefore(":")?.trim()
+                            ?: "Unknown"
+                        hosterMap.getOrPut(serverName) { mutableListOf() }.addAll(videos)
+                    }
+                }
+            }
+
+        return hosterMap.map { (serverName, videos) ->
             Hoster(
-                hosterName = "Multi",
-                videoList = sortedVideos,
-            ),
-        )
+                hosterName = serverName,
+                videoList = videos.sortVideos(),
+            )
+        }
     }
 
     // -------------------------------- Video extractors ------------------------------------
