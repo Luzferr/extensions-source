@@ -5,8 +5,13 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
 import okhttp3.OkHttpClient
 
-class SolidFilesExtractor(private val client: OkHttpClient) {
-    fun videosFromUrl(url: String, prefix: String = ""): List<Video> {
+class SolidFilesExtractor(
+    private val client: OkHttpClient,
+) {
+    fun videosFromUrl(
+        url: String,
+        prefix: String = "",
+    ): List<Video> {
         val videoList = mutableListOf<Video>()
         return try {
             val document = client.newCall(GET(url)).execute().asJsoup()
@@ -16,7 +21,14 @@ class SolidFilesExtractor(private val client: OkHttpClient) {
                     val url = data.replace("\"", "")
                     val videoUrl = url
                     val quality = prefix + "SolidFiles"
-                    videoList.add(Video(videoUrl, quality, videoUrl))
+                    videoList.add(
+                        Video(
+                            videoTitle = quality,
+                            videoUrl = videoUrl,
+                            subtitleTracks = emptyList(),
+                            audioTracks = emptyList(),
+                        ),
+                    )
                 }
             }
             videoList

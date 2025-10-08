@@ -4,7 +4,9 @@ import java.util.regex.Pattern
 import kotlin.math.pow
 
 // https://github.com/cylonu87/JsUnpacker
-class JsUnpacker(packedJS: String?) {
+class JsUnpacker(
+    packedJS: String?,
+) {
     private var packedJS: String? = null
 
     /**
@@ -67,12 +69,15 @@ class JsUnpacker(packedJS: String?) {
         return null
     }
 
-    private inner class Unbase(private val radix: Int) {
+    private inner class Unbase(
+        private val radix: Int,
+    ) {
         private val alphabet62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
         private val alphabet95 =
             " !\"#$%&\\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
         private var alphabet: String? = null
         private var dictionary: HashMap<String, Int>? = null
+
         fun unbase(str: String): Int {
             var ret = 0
             if (alphabet == null) {
@@ -92,12 +97,15 @@ class JsUnpacker(packedJS: String?) {
                     radix < 62 -> {
                         alphabet = alphabet62.substring(0, radix)
                     }
+
                     radix in 63..94 -> {
                         alphabet = alphabet95.substring(0, radix)
                     }
+
                     radix == 62 -> {
                         alphabet = alphabet62
                     }
+
                     radix == 95 -> {
                         alphabet = alphabet95
                     }
@@ -110,9 +118,7 @@ class JsUnpacker(packedJS: String?) {
         }
     }
 
-    /**
-     * @param packedJS javascript P.A.C.K.E.R. coded.
-     */
+    // Initialize with the packed JavaScript string
     init {
         this.packedJS = packedJS
     }

@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -34,8 +35,9 @@ import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 
-class AnimeLatinoHD : ConfigurableAnimeSource, AnimeHttpSource() {
-
+class AnimeLatinoHD :
+    AnimeHttpSource(),
+    ConfigurableAnimeSource {
     override val name = "AnimeLatinoHD"
 
     override val baseUrl = "https://www.animelatinohd.com"
@@ -57,12 +59,29 @@ class AnimeLatinoHD : ConfigurableAnimeSource, AnimeHttpSource() {
 
         private const val PREF_SERVER_KEY = "preferred_server"
         private const val PREF_SERVER_DEFAULT = "FileLions"
-        private val SERVER_LIST = arrayOf(
-            "YourUpload", "BurstCloud", "Voe", "Mp4Upload", "Doodstream",
-            "Upload", "BurstCloud", "Upstream", "StreamTape", "Amazon",
-            "Fastream", "Filemoon", "StreamWish", "Okru", "Streamlare",
-            "FileLions", "StreamHideVid", "SolidFiles", "Od.lk", "CldUp",
-        )
+        private val SERVER_LIST =
+            arrayOf(
+                "YourUpload",
+                "BurstCloud",
+                "Voe",
+                "Mp4Upload",
+                "Doodstream",
+                "Upload",
+                "BurstCloud",
+                "Upstream",
+                "StreamTape",
+                "Amazon",
+                "Fastream",
+                "Filemoon",
+                "StreamWish",
+                "Okru",
+                "Streamlare",
+                "FileLions",
+                "StreamHideVid",
+                "SolidFiles",
+                "Od.lk",
+                "CldUp",
+            )
 
         private const val PREF_LANGUAGE_KEY = "preferred_language"
         private const val PREF_LANGUAGE_DEFAULT = "[LAT]"
@@ -74,7 +93,10 @@ class AnimeLatinoHD : ConfigurableAnimeSource, AnimeHttpSource() {
     override fun popularAnimeParse(response: Response): AnimesPage {
         val document = response.asJsoup()
         val animeList = mutableListOf<SAnime>()
-        val url = response.request.url.toString().lowercase()
+        val url =
+            response.request.url
+                .toString()
+                .lowercase()
         val hasNextPage = document.select("#__next > main > div > div[class*=\"Animes_paginate\"] a:last-child svg").any()
         document.select("script").forEach { script ->
             if (script.data().contains("{\"props\":{\"pageProps\":")) {
@@ -123,7 +145,11 @@ class AnimeLatinoHD : ConfigurableAnimeSource, AnimeHttpSource() {
                 val data = pageProps["data"]!!.jsonObject
 
                 newAnime.title = data["name"]!!.jsonPrimitive.content
-                newAnime.genre = data["genres"]!!.jsonPrimitive.content.split(",").joinToString()
+                newAnime.genre =
+                    data["genres"]!!
+                        .jsonPrimitive.content
+                        .split(",")
+                        .joinToString()
                 newAnime.description = data["overview"]!!.jsonPrimitive.content
                 newAnime.status = parseStatus(data["status"]!!.jsonPrimitive.content)
                 newAnime.thumbnail_url = "https://image.tmdb.org/t/p/w600_and_h900_bestv2${data["poster"]!!.jsonPrimitive.content}"
@@ -146,15 +172,37 @@ class AnimeLatinoHD : ConfigurableAnimeSource, AnimeHttpSource() {
                 arrEpisode.forEach { item ->
                     val animeItem = item.jsonObject
                     val episode = SEpisode.create()
-                    episode.setUrlWithoutDomain(externalOrInternalImg("ver/${data["slug"]!!.jsonPrimitive.content}/${animeItem["number"]!!.jsonPrimitive.content.toFloat()}"))
+                    episode.setUrlWithoutDomain(
+                        externalOrInternalImg(
+                            "ver/${data["slug"]!!.jsonPrimitive.content}/${animeItem["number"]!!.jsonPrimitive.content.toFloat()}",
+                        ),
+                    )
                     episode.episode_number = animeItem["number"]!!.jsonPrimitive.content.toFloat()
                     episode.name = "Episodio ${animeItem["number"]!!.jsonPrimitive.content.toFloat()}"
+
+                    // Intentar obtener la imagen del episodio
+                    val stillPath =
+                        animeItem["image"]?.jsonPrimitive?.content
+                            ?: animeItem["still_path"]?.jsonPrimitive?.content
+                    stillPath?.let {
+                        if (it.isNotBlank()) {
+                            episode.preview_url =
+                                if (it.startsWith("http")) {
+                                    it
+                                } else {
+                                    "https://image.tmdb.org/t/p/w300$it"
+                                }
+                        }
+                    }
+
                     episodeList.add(episode)
                 }
             }
         }
         return episodeList
     }
+
+    override fun seasonListParse(response: Response) = throw UnsupportedOperationException()
 
     private fun parseJsonArray(json: JsonElement?): List<JsonElement> {
         val list = mutableListOf<JsonElement>()
@@ -168,7 +216,7 @@ class AnimeLatinoHD : ConfigurableAnimeSource, AnimeHttpSource() {
         return linkRegex.findAll(text).map { it.value.trim().removeSurrounding("\"") }.toList()
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
         val videoList = mutableListOf<Video>()
         document.select("script").forEach { script ->
@@ -183,29 +231,40 @@ class AnimeLatinoHD : ConfigurableAnimeSource, AnimeHttpSource() {
                     val servers = player.jsonArray
                     servers.forEach { server ->
                         val item = server.jsonObject
-                        val request = client.newCall(
-                            GET(
-                                url = "https://api.animelatinohd.com/stream/${item["id"]!!.jsonPrimitive.content}",
-                                headers = headers.newBuilder()
-                                    .add("Referer", "https://www.animelatinohd.com/")
-                                    .add("authority", "api.animelatinohd.com")
-                                    .add("upgrade-insecure-requests", "1")
-                                    .build(),
-                            ),
-                        ).execute()
+                        val request =
+                            client
+                                .newCall(
+                                    GET(
+                                        url = "https://api.animelatinohd.com/stream/${item["id"]!!.jsonPrimitive.content}",
+                                        headers =
+                                            headers
+                                                .newBuilder()
+                                                .add("Referer", "https://www.animelatinohd.com/")
+                                                .add("authority", "api.animelatinohd.com")
+                                                .add("upgrade-insecure-requests", "1")
+                                                .build(),
+                                    ),
+                                ).execute()
                         val locationsDdh = request.networkResponse.toString()
                         fetchUrls(locationsDdh).map { url ->
                             val language = if (item["languaje"]!!.jsonPrimitive.content == "1") "[LAT]" else "[SUB]"
                             val embedUrl = url.lowercase()
                             if (embedUrl.contains("filemoon")) {
-                                val vidHeaders = headers.newBuilder()
-                                    .add("Origin", "https://${url.toHttpUrl().host}")
-                                    .add("Referer", "https://${url.toHttpUrl().host}/")
-                                    .build()
-                                FilemoonExtractor(client).videosFromUrl(url, prefix = "$language Filemoon:", headers = vidHeaders).also(videoList::addAll)
+                                val vidHeaders =
+                                    headers
+                                        .newBuilder()
+                                        .add("Origin", "https://${url.toHttpUrl().host}")
+                                        .add("Referer", "https://${url.toHttpUrl().host}/")
+                                        .build()
+                                FilemoonExtractor(
+                                    client,
+                                ).videosFromUrl(url, prefix = "$language Filemoon:", headers = vidHeaders).also(videoList::addAll)
                             }
                             if (embedUrl.contains("filelions") || embedUrl.contains("lion")) {
-                                StreamWishExtractor(client, headers).videosFromUrl(url, videoNameGen = { "$language FileLions:$it" }).also(videoList::addAll)
+                                StreamWishExtractor(
+                                    client,
+                                    headers,
+                                ).videosFromUrl(url, videoNameGen = { "$language FileLions:$it" }).also(videoList::addAll)
                             }
                             if (embedUrl.contains("streamtape")) {
                                 StreamTapeExtractor(client).videoFromUrl(url, "$language Streamtape")?.let { videoList.add(it) }
@@ -220,54 +279,89 @@ class AnimeLatinoHD : ConfigurableAnimeSource, AnimeHttpSource() {
                                 SolidFilesExtractor(client).videosFromUrl(url, language).also(videoList::addAll)
                             }
                             if (embedUrl.contains("od.lk")) {
-                                videoList.add(Video(url, language + "Od.lk", url))
+                                videoList.add(
+                                    Video(
+                                        videoTitle = language + "Od.lk",
+                                        videoUrl = url,
+                                        subtitleTracks = emptyList(),
+                                        audioTracks = emptyList(),
+                                    ),
+                                )
                             }
                             if (embedUrl.contains("cldup.com")) {
-                                videoList.add(Video(url, language + "CldUp", url))
+                                videoList.add(
+                                    Video(
+                                        videoTitle = language + "CldUp",
+                                        videoUrl = url,
+                                        subtitleTracks = emptyList(),
+                                        audioTracks = emptyList(),
+                                    ),
+                                )
                             }
                         }
                     }
                 }
             }
         }
-        return videoList
+
+        val hosterMap =
+            videoList.groupBy { video ->
+                video.videoTitle.substringBefore(":").trim()
+            }
+
+        return hosterMap.map { (name, videos) ->
+            Hoster(hosterName = name, videoList = videos)
+        }
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         val lang = preferences.getString(PREF_LANGUAGE_KEY, PREF_LANGUAGE_DEFAULT)!!
-        return this.sortedWith(
-            compareBy(
-                { it.quality.contains(lang) },
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
-            ),
-        ).reversed()
+        return this
+            .sortedWith(
+                compareBy(
+                    { it.videoTitle.contains(lang) },
+                    { it.videoTitle.contains(server, true) },
+                    { it.videoTitle.contains(quality) },
+                    {
+                        Regex("""(\d+)p""")
+                            .find(it.videoTitle)
+                            ?.groupValues
+                            ?.get(1)
+                            ?.toIntOrNull() ?: 0
+                    },
+                ),
+            ).reversed()
     }
 
-    override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
+    override fun searchAnimeRequest(
+        page: Int,
+        query: String,
+        filters: AnimeFilterList,
+    ): Request {
         val filterList = if (filters.isEmpty()) getFilterList() else filters
         val genreFilter = filterList.find { it is GenreFilter } as GenreFilter
         val stateFilter = filterList.find { it is StateFilter } as StateFilter
         val typeFilter = filterList.find { it is TypeFilter } as TypeFilter
 
-        val filterUrl = if (query.isBlank()) {
-            "$baseUrl/animes?page=$page&genre=${genreFilter.toUriPart()}&status=${stateFilter.toUriPart()}&type=${typeFilter.toUriPart()}"
-        } else {
-            "$baseUrl/animes?page=$page&search=$query"
-        }
+        val filterUrl =
+            if (query.isBlank()) {
+                "$baseUrl/animes?page=$page&genre=${genreFilter.toUriPart()}&status=${stateFilter.toUriPart()}&type=${typeFilter.toUriPart()}"
+            } else {
+                "$baseUrl/animes?page=$page&search=$query"
+            }
 
         return GET(filterUrl)
     }
 
-    override fun getFilterList(): AnimeFilterList = AnimeFilterList(
-        AnimeFilter.Header("La busqueda por texto ignora los filtros"),
-        GenreFilter(),
-        StateFilter(),
-        TypeFilter(),
-    )
+    override fun getFilterList(): AnimeFilterList =
+        AnimeFilterList(
+            AnimeFilter.Header("La busqueda por texto ignora los filtros"),
+            GenreFilter(),
+            StateFilter(),
+            TypeFilter(),
+        )
 
     override fun searchAnimeParse(response: Response): AnimesPage {
         val document = response.asJsoup()
@@ -293,143 +387,150 @@ class AnimeLatinoHD : ConfigurableAnimeSource, AnimeHttpSource() {
         return AnimesPage(animeList, hasNextPage)
     }
 
-    private class GenreFilter : UriPartFilter(
-        "Géneros",
-        arrayOf(
-            Pair("<Selecionar>", ""),
-            Pair("Acción", "accion"),
-            Pair("Aliens", "aliens"),
-            Pair("Artes Marciales", "artes-marciales"),
-            Pair("Aventura", "aventura"),
-            Pair("Ciencia Ficción", "ciencia-ficcion"),
-            Pair("Comedia", "comedia"),
-            Pair("Cyberpunk", "cyberpunk"),
-            Pair("Demonios", "demonios"),
-            Pair("Deportes", "deportes"),
-            Pair("Detectives", "detectives"),
-            Pair("Drama", "drama"),
-            Pair("Ecchi", "ecchi"),
-            Pair("Escolar", "escolar"),
-            Pair("Espacio", "espacio"),
-            Pair("Fantasía", "fantasia"),
-            Pair("Gore", "gore"),
-            Pair("Harem", "harem"),
-            Pair("Histórico", "historico"),
-            Pair("Horror", "horror"),
-            Pair("Josei", "josei"),
-            Pair("Juegos", "juegos"),
-            Pair("Kodomo", "kodomo"),
-            Pair("Magia", "magia"),
-            Pair("Maho Shoujo", "maho-shoujo"),
-            Pair("Mecha", "mecha"),
-            Pair("Militar", "militar"),
-            Pair("Misterio", "misterio"),
-            Pair("Musica", "musica"),
-            Pair("Parodia", "parodia"),
-            Pair("Policial", "policial"),
-            Pair("Psicológico", "psicologico"),
-            Pair("Recuentos De La Vida", "recuentos-de-la-vida"),
-            Pair("Romance", "romance"),
-            Pair("Samurais", "samurais"),
-            Pair("Seinen", "seinen"),
-            Pair("Shoujo", "shoujo"),
-            Pair("Shoujo Ai", "shoujo-ai"),
-            Pair("Shounen", "shounen"),
-            Pair("Shounen Ai", "shounen-ai"),
-            Pair("Sobrenatural", "sobrenatural"),
-            Pair("Soft Hentai", "soft-hentai"),
-            Pair("Super Poderes", "super-poderes"),
-            Pair("Suspenso", "suspenso"),
-            Pair("Terror", "terror"),
-            Pair("Vampiros", "vampiros"),
-            Pair("Yaoi", "yaoi"),
-            Pair("Yuri", "yuri"),
-        ),
-    )
+    private class GenreFilter :
+        UriPartFilter(
+            "Géneros",
+            arrayOf(
+                Pair("<Selecionar>", ""),
+                Pair("Acción", "accion"),
+                Pair("Aliens", "aliens"),
+                Pair("Artes Marciales", "artes-marciales"),
+                Pair("Aventura", "aventura"),
+                Pair("Ciencia Ficción", "ciencia-ficcion"),
+                Pair("Comedia", "comedia"),
+                Pair("Cyberpunk", "cyberpunk"),
+                Pair("Demonios", "demonios"),
+                Pair("Deportes", "deportes"),
+                Pair("Detectives", "detectives"),
+                Pair("Drama", "drama"),
+                Pair("Ecchi", "ecchi"),
+                Pair("Escolar", "escolar"),
+                Pair("Espacio", "espacio"),
+                Pair("Fantasía", "fantasia"),
+                Pair("Gore", "gore"),
+                Pair("Harem", "harem"),
+                Pair("Histórico", "historico"),
+                Pair("Horror", "horror"),
+                Pair("Josei", "josei"),
+                Pair("Juegos", "juegos"),
+                Pair("Kodomo", "kodomo"),
+                Pair("Magia", "magia"),
+                Pair("Maho Shoujo", "maho-shoujo"),
+                Pair("Mecha", "mecha"),
+                Pair("Militar", "militar"),
+                Pair("Misterio", "misterio"),
+                Pair("Musica", "musica"),
+                Pair("Parodia", "parodia"),
+                Pair("Policial", "policial"),
+                Pair("Psicológico", "psicologico"),
+                Pair("Recuentos De La Vida", "recuentos-de-la-vida"),
+                Pair("Romance", "romance"),
+                Pair("Samurais", "samurais"),
+                Pair("Seinen", "seinen"),
+                Pair("Shoujo", "shoujo"),
+                Pair("Shoujo Ai", "shoujo-ai"),
+                Pair("Shounen", "shounen"),
+                Pair("Shounen Ai", "shounen-ai"),
+                Pair("Sobrenatural", "sobrenatural"),
+                Pair("Soft Hentai", "soft-hentai"),
+                Pair("Super Poderes", "super-poderes"),
+                Pair("Suspenso", "suspenso"),
+                Pair("Terror", "terror"),
+                Pair("Vampiros", "vampiros"),
+                Pair("Yaoi", "yaoi"),
+                Pair("Yuri", "yuri"),
+            ),
+        )
 
-    private class StateFilter : UriPartFilter(
-        "Estado",
-        arrayOf(
-            Pair("Todos", ""),
-            Pair("Finalizado", "0"),
-            Pair("En emisión", "1"),
-        ),
-    )
+    private class StateFilter :
+        UriPartFilter(
+            "Estado",
+            arrayOf(
+                Pair("Todos", ""),
+                Pair("Finalizado", "0"),
+                Pair("En emisión", "1"),
+            ),
+        )
 
-    private class TypeFilter : UriPartFilter(
-        "Tipo",
-        arrayOf(
-            Pair("Todos", ""),
-            Pair("Animes", "tv"),
-            Pair("Películas", "movie"),
-            Pair("Especiales", "special"),
-            Pair("OVAS", "ova"),
-            Pair("ONAS", "ona"),
-        ),
-    )
+    private class TypeFilter :
+        UriPartFilter(
+            "Tipo",
+            arrayOf(
+                Pair("Todos", ""),
+                Pair("Animes", "tv"),
+                Pair("Películas", "movie"),
+                Pair("Especiales", "special"),
+                Pair("OVAS", "ova"),
+                Pair("ONAS", "ona"),
+            ),
+        )
 
-    private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) :
-        AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
+    private open class UriPartFilter(
+        displayName: String,
+        val vals: Array<Pair<String, String>>,
+    ) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
         fun toUriPart() = vals[state].second
     }
 
     private fun externalOrInternalImg(url: String) = if (url.contains("https")) url else "$baseUrl/$url"
 
-    private fun parseStatus(statusString: String): Int {
-        return when {
+    private fun parseStatus(statusString: String): Int =
+        when {
             statusString.contains("1") -> SAnime.ONGOING
             statusString.contains("0") -> SAnime.COMPLETED
             else -> SAnime.UNKNOWN
         }
-    }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        ListPreference(screen.context).apply {
-            key = PREF_LANGUAGE_KEY
-            title = "Preferred language"
-            entries = LANGUAGE_LIST
-            entryValues = LANGUAGE_LIST
-            setDefaultValue(PREF_LANGUAGE_DEFAULT)
-            summary = "%s"
+        ListPreference(screen.context)
+            .apply {
+                key = PREF_LANGUAGE_KEY
+                title = "Preferred language"
+                entries = LANGUAGE_LIST
+                entryValues = LANGUAGE_LIST
+                setDefaultValue(PREF_LANGUAGE_DEFAULT)
+                summary = "%s"
 
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
+                setOnPreferenceChangeListener { _, newValue ->
+                    val selected = newValue as String
+                    val index = findIndexOfValue(selected)
+                    val entry = entryValues[index] as String
+                    preferences.edit().putString(key, entry).commit()
+                }
+            }.also(screen::addPreference)
 
-        ListPreference(screen.context).apply {
-            key = PREF_QUALITY_KEY
-            title = "Preferred quality"
-            entries = QUALITY_LIST
-            entryValues = QUALITY_LIST
-            setDefaultValue(PREF_QUALITY_DEFAULT)
-            summary = "%s"
+        ListPreference(screen.context)
+            .apply {
+                key = PREF_QUALITY_KEY
+                title = "Preferred quality"
+                entries = QUALITY_LIST
+                entryValues = QUALITY_LIST
+                setDefaultValue(PREF_QUALITY_DEFAULT)
+                summary = "%s"
 
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
+                setOnPreferenceChangeListener { _, newValue ->
+                    val selected = newValue as String
+                    val index = findIndexOfValue(selected)
+                    val entry = entryValues[index] as String
+                    preferences.edit().putString(key, entry).commit()
+                }
+            }.also(screen::addPreference)
 
-        ListPreference(screen.context).apply {
-            key = PREF_SERVER_KEY
-            title = "Preferred server"
-            entries = SERVER_LIST
-            entryValues = SERVER_LIST
-            setDefaultValue(PREF_SERVER_DEFAULT)
-            summary = "%s"
+        ListPreference(screen.context)
+            .apply {
+                key = PREF_SERVER_KEY
+                title = "Preferred server"
+                entries = SERVER_LIST
+                entryValues = SERVER_LIST
+                setDefaultValue(PREF_SERVER_DEFAULT)
+                summary = "%s"
 
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
+                setOnPreferenceChangeListener { _, newValue ->
+                    val selected = newValue as String
+                    val index = findIndexOfValue(selected)
+                    val entry = entryValues[index] as String
+                    preferences.edit().putString(key, entry).commit()
+                }
+            }.also(screen::addPreference)
     }
 }
