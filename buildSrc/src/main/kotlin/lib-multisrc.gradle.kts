@@ -11,6 +11,10 @@ android {
     defaultConfig {
         minSdk = AndroidConfig.minSdk
     }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
 
     namespace = "eu.kanade.tachiyomi.multisrc.${project.name}"
 
