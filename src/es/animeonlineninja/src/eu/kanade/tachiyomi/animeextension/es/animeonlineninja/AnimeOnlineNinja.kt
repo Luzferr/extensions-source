@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.animeextension.es.animeonlineninja
 
-import android.content.SharedPreferences
 import androidx.preference.CheckBoxPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
@@ -21,6 +20,7 @@ import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
 import eu.kanade.tachiyomi.lib.uqloadextractor.UqloadExtractor
 import eu.kanade.tachiyomi.lib.vidhideextractor.VidHideExtractor
 import eu.kanade.tachiyomi.multisrc.dooplay.DooPlay
+import eu.kanade.tachiyomi.multisrc.dooplay.splitSeasons
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.util.asJsoup
@@ -80,7 +80,7 @@ class AnimeOnlineNinja :
             element.selectFirst("div.quality")?.let {
                 description = it.text()
             }
-            val isSeries = !url.contains("/pelicula/", ignoreCase = true)
+            val isSeries = detectIsSeries(url)
             fetch_type = preferredFetchType(isSeries)
         }
 
@@ -92,7 +92,7 @@ class AnimeOnlineNinja :
             title = img.attr("alt")
             thumbnail_url = img.getImageUrl()
             val url = element.attr("href")
-            val isSeries = !url.contains("/pelicula/", ignoreCase = true)
+            val isSeries = detectIsSeries(url)
             fetch_type = preferredFetchType(isSeries)
         }
 
@@ -257,11 +257,6 @@ class AnimeOnlineNinja :
         return seasonsToUse.reversed().flatMap { seasonElement ->
             getSeasonEpisodes(seasonElement).reversed()
         }
-    }
-
-    override suspend fun getSeasonList(anime: SAnime): List<SAnime> {
-        val response = client.newCall(animeDetailsRequest(anime)).execute()
-        return seasonListParse(response)
     }
 
     override fun seasonListParse(response: Response): List<SAnime> {
@@ -568,12 +563,15 @@ class AnimeOnlineNinja :
         val hasSeries = seasonList.isNotEmpty()
 
         val requestUrl = response.request.url
-        val forcedEpisodeMode =
-            requestUrl.queryParameter("season") != null ||
-                requestUrl.encodedPath.contains("/episodio/")
+        val forcedEpisodeMode = isForcedEpisodeMode(requestUrl)
+        val fetchType =
+            when {
+                forcedEpisodeMode -> FetchType.Episodes
+                else -> preferredFetchType(hasSeries)
+            }
 
         return anime.apply {
-            fetch_type = preferredFetchType(hasSeries)
+            fetch_type = fetchType
             if (forcedEpisodeMode) {
                 url = requestUrl.toString().removePrefix(baseUrl)
             }
@@ -648,7 +646,7 @@ class AnimeOnlineNinja :
                 key = PREF_SPLIT_SEASONS_KEY
                 title = "Split seasons"
                 summary = "Mostrar temporadas como entradas separadas"
-                setDefaultValue(PREF_SPLIT_SEASONS_DEFAULT)
+                setDefaultValue(true)
                 isChecked = preferences.splitSeasons
 
                 setOnPreferenceChangeListener { _, newValue ->
@@ -678,11 +676,6 @@ class AnimeOnlineNinja :
     override val prefQualityEntries = prefQualityValues
     override val episodeNumberRegex by lazy { Regex("""(\d+(?:\.\d+)?)$""") }
 
-    private fun prefersSeasonFetch(): Boolean = preferences.splitSeasons
-
-    private fun preferredFetchType(isSeries: Boolean): FetchType =
-        if (isSeries && prefersSeasonFetch()) FetchType.Seasons else FetchType.Episodes
-
     companion object {
         private const val PREF_LANG_KEY = "preferred_lang"
         private const val PREF_LANG_TITLE = "Preferred language"
@@ -709,35 +702,5 @@ class AnimeOnlineNinja :
         private const val PREF_VRF_INTERCEPT_TITLE = "Intercept VRF links (Requiere Reiniciar)"
         private const val PREF_VRF_INTERCEPT_SUMMARY = "Intercept VRF links and open them in the browser"
         private const val PREF_VRF_INTERCEPT_DEFAULT = false
-
-        const val PREF_SPLIT_SEASONS_KEY = "split_seasons"
-        const val PREF_SPLIT_SEASONS_DEFAULT = true
-        internal const val LEGACY_PREF_FETCH_TYPE_KEY = "preferred_fetch_type"
-        internal const val LEGACY_FETCH_TYPE_SEASONS = "1"
     }
 }
-
-private var SharedPreferences.splitSeasons: Boolean
-    get() {
-        if (contains(AnimeOnlineNinja.PREF_SPLIT_SEASONS_KEY)) {
-            return getBoolean(AnimeOnlineNinja.PREF_SPLIT_SEASONS_KEY, true)
-        }
-
-        val legacy = getString(AnimeOnlineNinja.LEGACY_PREF_FETCH_TYPE_KEY, null)
-        val migrated = legacy.equals(AnimeOnlineNinja.LEGACY_FETCH_TYPE_SEASONS, ignoreCase = true)
-
-        if (legacy != null) {
-            edit()
-                .putBoolean(AnimeOnlineNinja.PREF_SPLIT_SEASONS_KEY, migrated)
-                .remove(AnimeOnlineNinja.LEGACY_PREF_FETCH_TYPE_KEY)
-                .apply()
-        }
-
-        return legacy?.let { migrated } ?: true
-    }
-    set(value) {
-        edit()
-            .putBoolean(AnimeOnlineNinja.PREF_SPLIT_SEASONS_KEY, value)
-            .remove(AnimeOnlineNinja.LEGACY_PREF_FETCH_TYPE_KEY)
-            .apply()
-    }

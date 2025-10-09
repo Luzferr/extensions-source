@@ -49,6 +49,11 @@ abstract class DooPlay(
          * Useful for the URL intent handler.
          */
         const val PREFIX_SEARCH = "path:"
+
+        const val PREF_SPLIT_SEASONS_KEY = "split_seasons"
+        const val PREF_SPLIT_SEASONS_DEFAULT = true
+        internal const val LEGACY_PREF_FETCH_TYPE_KEY = "preferred_fetch_type"
+        internal const val LEGACY_FETCH_TYPE_SEASONS = "1"
     }
 
     protected open val prefQualityDefault = "1080p"
@@ -76,7 +81,8 @@ abstract class DooPlay(
             setUrlWithoutDomain(url)
             title = img.attr("alt")
             thumbnail_url = img.getImageUrl()
-            fetch_type = FetchType.Episodes
+            val isSeries = detectIsSeries(url)
+            fetch_type = preferredFetchType(isSeries)
         }
 
     protected open fun popularAnimeNextPageSelector(): String? = null
@@ -117,7 +123,7 @@ abstract class DooPlay(
     override fun episodeListParse(response: Response): List<SEpisode> {
         val doc = getRealAnimeDoc(response.asJsoup())
         val seasonList = doc.select(seasonListSelector)
-        return if (seasonList.size < 1) {
+        return if (seasonList.isEmpty()) {
             SEpisode
                 .create()
                 .apply {
@@ -163,7 +169,19 @@ abstract class DooPlay(
                 ?.toDate() ?: 0L
             name = "$episodeSeasonPrefix $seasonName x $epNum - $episodeName"
             setUrlWithoutDomain(href.attr("href"))
+
+            // Extract episode image if available
+            element.selectFirst("img")?.let { img ->
+                preview_url = img.getImageUrl()
+            }
         }
+
+    override suspend fun getSeasonList(anime: SAnime): List<SAnime> {
+        if (anime.fetch_type != FetchType.Seasons) return emptyList()
+
+        val response = client.newCall(animeDetailsRequest(anime)).execute()
+        return seasonListParse(response)
+    }
 
     override fun seasonListParse(response: Response): List<SAnime> = emptyList()
 
@@ -254,7 +272,9 @@ abstract class DooPlay(
             val img = element.selectFirst("img")!!
             title = img.attr("alt")
             thumbnail_url = img.getImageUrl()
-            fetch_type = FetchType.Episodes
+            val url = element.attr("href")
+            val isSeries = detectIsSeries(url)
+            fetch_type = preferredFetchType(isSeries)
         }
 
     protected open fun searchAnimeNextPageSelector() = latestUpdatesNextPageSelector()
@@ -286,33 +306,50 @@ abstract class DooPlay(
         val document = response.asJsoup()
         val doc = getRealAnimeDoc(document)
         val sheader = doc.selectFirst("div.sheader")!!
-        return SAnime.create().apply {
-            setUrlWithoutDomain(doc.location())
-            sheader.selectFirst("div.poster > img")!!.let {
-                thumbnail_url = it.getImageUrl()
-                title =
-                    it.attr("alt").ifEmpty {
-                        sheader.selectFirst("div.data > h1")!!.text()
-                    }
-            }
-
-            genre =
-                sheader
-                    .select("div.data > div.sgeneros > a")
-                    .eachText()
-                    .joinToString()
-
-            doc.selectFirst(additionalInfoSelector)?.let { info ->
-                description =
-                    buildString {
-                        append(doc.getDescription())
-                        additionalInfoItems.forEach {
-                            info.getInfo(it)?.let(::append)
+        val anime =
+            SAnime.create().apply {
+                setUrlWithoutDomain(doc.location())
+                sheader.selectFirst("div.poster > img")!!.let {
+                    thumbnail_url = it.getImageUrl()
+                    title =
+                        it.attr("alt").ifEmpty {
+                            sheader.selectFirst("div.data > h1")!!.text()
                         }
-                    }
+                }
+
+                genre =
+                    sheader
+                        .select("div.data > div.sgeneros > a")
+                        .eachText()
+                        .joinToString()
+
+                doc.selectFirst(additionalInfoSelector)?.let { info ->
+                    description =
+                        buildString {
+                            append(doc.getDescription())
+                            additionalInfoItems.forEach {
+                                info.getInfo(it)?.let(::append)
+                            }
+                        }
+                }
             }
 
-            fetch_type = FetchType.Episodes
+        val seasonList = doc.select(seasonListSelector)
+        val hasSeries = seasonList.isNotEmpty()
+
+        val requestUrl = response.request.url
+        val forcedEpisodeMode = isForcedEpisodeMode(requestUrl)
+        val fetchType =
+            when {
+                forcedEpisodeMode -> FetchType.Episodes
+                else -> preferredFetchType(hasSeries)
+            }
+
+        return anime.apply {
+            fetch_type = fetchType
+            if (forcedEpisodeMode) {
+                url = requestUrl.toString().removePrefix(baseUrl)
+            }
         }
     }
 
@@ -545,6 +582,64 @@ abstract class DooPlay(
     protected open fun String.toDate(): Long =
         runCatching { dateFormatter.parse(trim())?.time }
             .getOrNull() ?: 0L
+
+    /**
+     * Detect if content is a series or movie based on URL.
+     * Override this method to customize detection logic for specific sites.
+     */
+    protected open fun detectIsSeries(url: String): Boolean =
+        !url.contains("/pelicula/", ignoreCase = true) &&
+            !url.contains("/movie/", ignoreCase = true) &&
+            !url.contains("/movies/", ignoreCase = true)
+
+    /**
+     * Check if the request URL indicates forced episode mode.
+     * This happens when viewing a specific season or episode page.
+     */
+    protected open fun isForcedEpisodeMode(url: okhttp3.HttpUrl): Boolean =
+        url.queryParameter("season") != null ||
+            url.encodedPath.contains("/episodio/", ignoreCase = true) ||
+            url.encodedPath.contains("/episode/", ignoreCase = true)
+
+    /**
+     * Helper method to determine FetchType based on whether content is a series
+     * and user preference for splitting seasons.
+     */
+    protected open fun preferredFetchType(isSeries: Boolean): FetchType =
+        if (isSeries && prefersSeasonFetch()) FetchType.Seasons else FetchType.Episodes
+
+    /**
+     * Check if user prefers to split seasons into separate entries.
+     */
+    protected open fun prefersSeasonFetch(): Boolean = preferences.splitSeasons
 }
 
 typealias FilterItems = Array<Pair<String, String>>
+
+/**
+ * Extension property to handle Split Seasons preference with legacy migration.
+ */
+var SharedPreferences.splitSeasons: Boolean
+    get() {
+        if (contains(DooPlay.PREF_SPLIT_SEASONS_KEY)) {
+            return getBoolean(DooPlay.PREF_SPLIT_SEASONS_KEY, true)
+        }
+
+        val legacy = getString(DooPlay.LEGACY_PREF_FETCH_TYPE_KEY, null)
+        val migrated = legacy.equals(DooPlay.LEGACY_FETCH_TYPE_SEASONS, ignoreCase = true)
+
+        if (legacy != null) {
+            edit()
+                .putBoolean(DooPlay.PREF_SPLIT_SEASONS_KEY, migrated)
+                .remove(DooPlay.LEGACY_PREF_FETCH_TYPE_KEY)
+                .apply()
+        }
+
+        return legacy?.let { migrated } ?: true
+    }
+    set(value) {
+        edit()
+            .putBoolean(DooPlay.PREF_SPLIT_SEASONS_KEY, value)
+            .remove(DooPlay.LEGACY_PREF_FETCH_TYPE_KEY)
+            .apply()
+    }
