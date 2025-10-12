@@ -50,34 +50,47 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
+import org.jsoup.Jsoup
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
+import java.util.Locale
 
+/**
+ * HackStoreMX Anime Extension
+ * Extension for streaming anime from HackStore.mx
+ */
 class Hackstoremx :
     AnimeHttpSource(),
     ConfigurableAnimeSource {
+    // ================================================================================================
+    // BASIC CONFIGURATION
+    // ================================================================================================
+
     override val name = "HackStoreMX"
-
     override val baseUrl = "https://hackstore.mx"
-
     override val lang = "es"
-
     override val supportsLatest = true
 
     private val json: Json by injectLazy()
-
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
+    // ================================================================================================
+    // CONSTANTS
+    // ================================================================================================
+
     companion object {
         const val PREFIX_SEARCH = "id:"
+
+        // Quality preferences
         const val PREF_QUALITY_KEY = "preferred_quality"
         const val PREF_QUALITY_DEFAULT = "1080"
         private val QUALITY_LIST = arrayOf("1080", "720", "480", "360")
 
+        // Server preferences
         private const val PREF_SERVER_KEY = "preferred_server"
         private const val PREF_SERVER_DEFAULT = "Voe"
         private val SERVER_LIST =
@@ -102,19 +115,23 @@ class Hackstoremx :
                 "VidGuard",
             )
 
+        // Language preferences
         private const val PREF_LANGUAGE_KEY = "preferred_language"
         private const val PREF_LANGUAGE_DEFAULT = "[LAT]"
         private val LANGUAGE_LIST = arrayOf("[LAT]", "[CAST]", "[SUB]")
 
+        // Season preferences
         const val PREF_SPLIT_SEASONS_KEY = "split_seasons"
         const val PREF_SPLIT_SEASONS_DEFAULT = true
         internal const val LEGACY_PREF_FETCH_TYPE_KEY = "preferred_fetch_type"
         internal const val LEGACY_FETCH_TYPE_SEASONS = "1"
 
+        // Date formatter
         private val DATE_FORMATTER by lazy {
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale("es", "ES"))
         }
 
+        // Server display names mapping
         private val SERVER_DISPLAY_NAMES =
             mapOf(
                 "voe" to "Voe",
@@ -138,138 +155,250 @@ class Hackstoremx :
             )
     }
 
+    // ================================================================================================
+    // VIDEO EXTRACTORS
+    // ================================================================================================
+
+    private val voeExtractor by lazy { VoeExtractor(client, headers) }
+    private val okruExtractor by lazy { OkruExtractor(client) }
+    private val filemoonExtractor by lazy { FilemoonExtractor(client) }
+    private val uqloadExtractor by lazy { UqloadExtractor(client) }
+    private val mp4uploadExtractor by lazy { Mp4uploadExtractor(client) }
+    private val streamWishExtractor by lazy { StreamWishExtractor(client, headers) }
+    private val doodExtractor by lazy { DoodExtractor(client) }
+    private val streamlareExtractor by lazy { StreamlareExtractor(client) }
+    private val yourUploadExtractor by lazy { YourUploadExtractor(client) }
+    private val burstCloudExtractor by lazy { BurstCloudExtractor(client) }
+    private val fastreamExtractor by lazy { FastreamExtractor(client, headers) }
+    private val upstreamExtractor by lazy { UpstreamExtractor(client) }
+    private val streamTapeExtractor by lazy { StreamTapeExtractor(client) }
+    private val vidHideExtractor by lazy { VidHideExtractor(client, headers) }
+    private val streamSilkExtractor by lazy { StreamSilkExtractor(client) }
+    private val vidGuardExtractor by lazy { VidGuardExtractor(client) }
+    private val universalExtractor by lazy { UniversalExtractor(client) }
+
+    // ================================================================================================
+    // POPULAR ANIME
+    // ================================================================================================
+
     override fun popularAnimeRequest(page: Int): Request =
         GET(
-            "https://hackstore.mx/wp-api/v1/listing/movies?page=$page&postsPerPage=12&orderBy=latest&order=desc&postType=movies&filter=%5B%5D",
+            "$baseUrl/wp-api/v1/listing/movies?page=$page&postsPerPage=12&orderBy=latest&order=desc&postType=movies&filter=%5B%5D",
             headers,
         )
 
     override fun popularAnimeParse(response: Response): AnimesPage {
         val jsonString = response.body.string()
-        val root = runCatching { json.parseToJsonElement(jsonString).jsonObject }.getOrNull() ?: return AnimesPage(emptyList(), false)
+        val root =
+            runCatching {
+                json.parseToJsonElement(jsonString).jsonObject
+            }.getOrNull() ?: return AnimesPage(emptyList(), false)
+
         val error = root["error"]?.jsonPrimitive?.boolean ?: false
         if (error) return AnimesPage(emptyList(), false)
+
         val data = root["data"]?.jsonObject ?: return AnimesPage(emptyList(), false)
         val posts = data["posts"]?.jsonArray ?: return AnimesPage(emptyList(), false)
         val pagination = data["pagination"]?.jsonObject
         val currentPage = pagination?.get("current_page")?.jsonPrimitive?.int ?: 1
         val lastPage = pagination?.get("last_page")?.jsonPrimitive?.int ?: 1
         val hasNextPage = currentPage < lastPage
+
         val animeList =
             posts.mapNotNull { element ->
-                val item = element.jsonObject
-                val title = item["title"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                val slug = item["slug"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                val images = item["images"]?.jsonObject
-                val poster =
-                    images
-                        ?.get("poster")
-                        ?.jsonPrimitive
-                        ?.content
-                        .orEmpty()
-                val posterUrl =
-                    when {
-                        poster.isBlank() -> ""
-                        poster.contains("/thumbs/") -> "https://hackstore.mx/wp-content/uploads$poster"
-                        poster.startsWith("/") -> "https://hackstore.mx$poster"
-                        poster.contains("hackstore.mx") -> poster
-                        else -> poster
-                    }
-                SAnime.create().apply {
-                    this.title = title
-                    this.thumbnail_url = posterUrl
-                    setUrlWithoutDomain("/peliculas/$slug")
-                    // Películas: preferir modo episodios
-                    fetch_type = preferredFetchType(false)
-                }
+                parseAnimeFromJson(element.jsonObject, false)
             }
+
         return AnimesPage(animeList, hasNextPage)
     }
+
+    // ================================================================================================
+    // LATEST UPDATES
+    // ================================================================================================
 
     override fun latestUpdatesRequest(page: Int): Request =
         GET(
-            "https://hackstore.mx/wp-api/v1/listing/tvshows?page=$page&postsPerPage=12&orderBy=latest&order=desc&postType=tvshows&filter=%5B%5D",
+            "$baseUrl/wp-api/v1/listing/tvshows?page=$page&postsPerPage=12&orderBy=latest&order=desc&postType=tvshows&filter=%5B%5D",
             headers,
         )
 
-    override fun animeDetailsRequest(anime: SAnime): Request = GET(anime.url.toAbsoluteUrl(), headers)
-
-    override fun episodeListRequest(anime: SAnime): Request = GET(anime.url.toAbsoluteUrl(), headers)
-
-    override fun hosterListRequest(episode: SEpisode): Request {
-        // Try to extract _id query param from the episode url
-        val url = episode.url.toAbsoluteUrl()
-        val parsed = url.toHttpUrl()
-        val qId = parsed.queryParameter("_id") ?: parsed.queryParameter("postId")
-        if (!qId.isNullOrBlank()) {
-            // Prefer the /player endpoint which returns embeds/servers for the episode
-            return GET("$baseUrl/wp-api/v1/player?postId=$qId", headers)
-        }
-
-        // Try to extract slug from path segments
-        val pathSegments = parsed.pathSegments
-        val idx = pathSegments.indexOf("episodes")
-        val slug = if (idx != -1 && idx + 1 < pathSegments.size) pathSegments[idx + 1] else null
-        if (!slug.isNullOrBlank()) {
-            return GET("$baseUrl/wp-api/v1/single/episodes?slug=$slug&postType=episodes", headers)
-        }
-
-        return GET(url, headers)
-    }
-
     override fun latestUpdatesParse(response: Response): AnimesPage {
         val jsonString = response.body.string()
-        val root = runCatching { json.parseToJsonElement(jsonString).jsonObject }.getOrNull() ?: return AnimesPage(emptyList(), false)
+        val root =
+            runCatching {
+                json.parseToJsonElement(jsonString).jsonObject
+            }.getOrNull() ?: return AnimesPage(emptyList(), false)
+
         val error = root["error"]?.jsonPrimitive?.boolean ?: false
         if (error) return AnimesPage(emptyList(), false)
+
         val data = root["data"]?.jsonObject ?: return AnimesPage(emptyList(), false)
         val posts = data["posts"]?.jsonArray ?: return AnimesPage(emptyList(), false)
         val pagination = data["pagination"]?.jsonObject
         val currentPage = pagination?.get("current_page")?.jsonPrimitive?.int ?: 1
         val lastPage = pagination?.get("last_page")?.jsonPrimitive?.int ?: 1
         val hasNextPage = currentPage < lastPage
+
         val animeList =
             posts.mapNotNull { element ->
-                val item = element.jsonObject
-                val title = item["title"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                val slug = item["slug"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                val images = item["images"]?.jsonObject
-                val poster =
-                    images
-                        ?.get("poster")
-                        ?.jsonPrimitive
-                        ?.content
-                        .orEmpty()
-                val posterUrl =
-                    when {
-                        poster.isBlank() -> ""
-                        poster.contains("/thumbs/") -> "https://hackstore.mx/wp-content/uploads$poster"
-                        poster.startsWith("/") -> "https://hackstore.mx$poster"
-                        poster.contains("hackstore.mx") -> poster
-                        else -> poster
-                    }
-                SAnime.create().apply {
-                    this.title = title
-                    this.thumbnail_url = posterUrl
-                    this.fetch_type = preferredFetchType(true)
-                    setUrlWithoutDomain("/series/$slug")
-                }
+                parseAnimeFromJson(element.jsonObject, true)
             }
+
         return AnimesPage(animeList, hasNextPage)
     }
 
+    // ================================================================================================
+    // SEARCH
+    // ================================================================================================
+
+    override fun searchAnimeRequest(
+        page: Int,
+        query: String,
+        filters: AnimeFilterList,
+    ): Request =
+        if (query.isNotBlank()) {
+            GET("$baseUrl/?s=$query&page=$page", headers)
+        } else {
+            popularAnimeRequest(page)
+        }
+
+    override fun searchAnimeParse(response: Response): AnimesPage {
+        val document = response.asJsoup()
+        val animeList =
+            document.select("article.post").map { element ->
+                SAnime.create().apply {
+                    title = element.selectFirst("h3")?.text() ?: ""
+                    val itemUrl = element.selectFirst("a")?.attr("href") ?: ""
+                    setUrlWithoutDomain(itemUrl)
+                    val isSeries = itemUrl.contains("/series/") || itemUrl.contains("/serie/")
+                    fetch_type = preferredFetchType(isSeries)
+                    thumbnail_url = element.selectFirst("img")?.attr("src") ?: ""
+                    status = SAnime.UNKNOWN
+                }
+            }
+        val hasNextPage = document.selectFirst("a.next") != null
+        return AnimesPage(animeList, hasNextPage)
+    }
+
+    // ================================================================================================
+    // ANIME DETAILS
+    // ================================================================================================
+
+    override fun animeDetailsRequest(anime: SAnime): Request = GET(anime.url.toAbsoluteUrl(), headers)
+
+    override fun animeDetailsParse(response: Response): SAnime {
+        val pathSegments = response.request.url.pathSegments
+        val (postType, possibleSlug) =
+            when {
+                pathSegments.contains("peliculas") -> {
+                    "movies" to pathSegments.getOrNull(pathSegments.indexOf("peliculas") + 1)
+                }
+
+                pathSegments.contains("series") -> {
+                    "tvshows" to pathSegments.getOrNull(pathSegments.indexOf("series") + 1)
+                }
+
+                else -> {
+                    null to pathSegments.lastOrNull()
+                }
+            }
+
+        val slug = possibleSlug
+        val siteConfig = response.extractPageProps()
+
+        val infoReq =
+            GET(
+                "$baseUrl/wp-api/v1/single/${postType ?: "tvshows"}?slug=$slug&postType=${postType ?: "tvshows"}",
+                headers,
+            )
+
+        client.newCall(infoReq).execute().use { infoResp ->
+            val infoBody = infoResp.body.string()
+            val infoRoot =
+                runCatching {
+                    json.parseToJsonElement(infoBody).jsonObject
+                }.getOrNull()
+            val data = infoRoot?.obj("data") ?: return@use
+
+            val isMovie = data["type"]?.jsonPrimitive?.contentOrNull?.equals("movies", true) == true
+            val hasSeasons =
+                (data.array("seasons")?.isNotEmpty() == true) ||
+                    (data.obj("post")?.array("seasons")?.isNotEmpty() == true)
+            val fetchType = preferredFetchType(!isMovie && hasSeasons)
+
+            return SAnime.create().apply {
+                title = (data["title"]?.jsonPrimitive?.contentOrNull ?: slug).toString()
+                val posterPath =
+                    data
+                        .obj("images")
+                        ?.get("poster")
+                        ?.jsonPrimitive
+                        ?.contentOrNull
+                thumbnail_url = posterPath?.let { resolvePosterUrl(it.optimizeImageUrl()) }
+                description = data["overview"]?.jsonPrimitive?.contentOrNull
+
+                // Map genre IDs to names
+                val genreNames =
+                    data
+                        .array("genres")
+                        ?.mapNotNull { it.jsonPrimitive.contentOrNull?.toIntOrNull() }
+                        ?.mapNotNull { id ->
+                            siteConfig
+                                ?.obj("datas")
+                                ?.obj("genres")
+                                ?.get(id.toString())
+                                ?.jsonObjectOrNull()
+                                ?.string("name")
+                        } ?: emptyList()
+                genre = genreNames.joinToString(", ")
+
+                author = data["director"]?.jsonPrimitive?.contentOrNull
+                artist =
+                    data
+                        .obj("cast")
+                        ?.array("acting")
+                        ?.firstOrNull()
+                        ?.jsonObjectOrNull()
+                        ?.string("name")
+                status = if (isMovie) SAnime.COMPLETED else SAnime.UNKNOWN
+                fetch_type = fetchType
+                setUrlWithoutDomain(if (isMovie) "/peliculas/$slug" else "/series/$slug")
+            }
+        }
+
+        return SAnime.create()
+    }
+
+    // ================================================================================================
+    // EPISODE LIST
+    // ================================================================================================
+
+    override fun episodeListRequest(anime: SAnime): Request = GET(anime.url.toAbsoluteUrl(), headers)
+
     override fun episodeListParse(response: Response): List<SEpisode> {
-        // Fallback adicional para películas: intentar obtener metadata desde el endpoint público
+        // Try to get movie metadata
         try {
-            val episodes = mutableListOf<SEpisode>()
             val pathSegments = response.request.url.pathSegments
             val movieIndex = pathSegments.indexOf("peliculas")
-            val movieSlug = if (movieIndex != -1 && movieIndex + 1 < pathSegments.size) pathSegments[movieIndex + 1] else null
+            val movieSlug =
+                if (movieIndex != -1 && movieIndex + 1 < pathSegments.size) {
+                    pathSegments[movieIndex + 1]
+                } else {
+                    null
+                }
+
             if (!movieSlug.isNullOrBlank()) {
-                val infoReq = GET("$baseUrl/wp-api/v1/single/movies?slug=$movieSlug&postType=movies", headers)
+                val infoReq =
+                    GET(
+                        "$baseUrl/wp-api/v1/single/movies?slug=$movieSlug&postType=movies",
+                        headers,
+                    )
                 client.newCall(infoReq).execute().use { infoResp ->
-                    val infoBody = infoResp.body?.string().orEmpty()
-                    val infoRoot = runCatching { json.parseToJsonElement(infoBody).jsonObject }.getOrNull()
+                    val infoBody = infoResp.body.string()
+                    val infoRoot =
+                        runCatching {
+                            json.parseToJsonElement(infoBody).jsonObject
+                        }.getOrNull()
                     val data = infoRoot?.obj("data")
                     if (data != null) {
                         val ep =
@@ -278,28 +407,326 @@ class Hackstoremx :
                                 name = "Película"
                                 setUrlWithoutDomain("/peliculas/$movieSlug")
                             }
-                        episodes.add(ep)
-                        return episodes
+                        return listOf(ep)
                     }
                 }
             }
-        } catch (e: Exception) {
-            // ignore
+        } catch (_: Exception) {
+            // Ignore and continue
         }
 
-        // Fallback adicional: intentar obtener episodios desde el endpoint público del sitio
+        // Try to get series episodes
+        return getSeriesEpisodes(response)
+    }
+
+    // ================================================================================================
+    // SEASON LIST
+    // ================================================================================================
+
+    override suspend fun getSeasonList(anime: SAnime): List<SAnime> {
+        if (anime.fetch_type != FetchType.Seasons) return emptyList()
+        val request = GET(anime.url.toAbsoluteUrl(), headers)
+        return client.newCall(request).execute().use { seasonListParse(it) }
+    }
+
+    override fun seasonListParse(response: Response): List<SAnime> {
+        Log.e("HackStoreMX", "seasonListParse: url=${response.request.url}")
+
+        val pageProps = response.extractPageProps()
+        val meta = pageProps?.toGnulaMeta()
+
+        if (meta != null) {
+            Log.e("HackStoreMX", "seasonListParse: found pageProps meta, isMovie=${meta.isMovie}, seasons=${meta.seasons.size}")
+            if (meta.isMovie) return emptyList()
+
+            val basePath =
+                response.request.url
+                    .toString()
+                    .removePrefix(baseUrl)
+            return meta.seasons.map { season ->
+                season.toSAnime(basePath, meta, baseUrl)
+            }
+        }
+
+        // Fallback: try to get seasons from public API
+        return getSeasonListFromApi(response)
+    }
+
+    // ================================================================================================
+    // HOSTER LIST
+    // ================================================================================================
+
+    override fun hosterListRequest(episode: SEpisode): Request {
+        val url = episode.url.toAbsoluteUrl()
+        val parsed = url.toHttpUrl()
+        val qId = parsed.queryParameter("_id") ?: parsed.queryParameter("postId")
+
+        if (!qId.isNullOrBlank()) {
+            return GET("$baseUrl/wp-api/v1/player?postId=$qId", headers)
+        }
+
+        val pathSegments = parsed.pathSegments
+        val idx = pathSegments.indexOf("episodes")
+        val slug =
+            if (idx != -1 && idx + 1 < pathSegments.size) {
+                pathSegments[idx + 1]
+            } else {
+                null
+            }
+
+        if (!slug.isNullOrBlank()) {
+            return GET("$baseUrl/wp-api/v1/single/episodes?slug=$slug&postType=episodes", headers)
+        }
+
+        return GET(url, headers)
+    }
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val body = response.body.string()
+
+        // Try to extract hosters from pageProps
+        val pageProps = extractPagePropsFromString(body)
+        if (pageProps != null) {
+            val hostersFromProps = extractHostersFromPageProps(pageProps)
+            if (hostersFromProps.isNotEmpty()) return hostersFromProps
+        }
+
+        // Try to extract from /player endpoint
+        val hostersFromPlayer = extractHostersFromPlayer(body, response)
+        if (hostersFromPlayer.isNotEmpty()) return hostersFromPlayer
+
+        // Try to extract from episode API
+        val hostersFromEpisodeApi = extractHostersFromEpisodeApi(response)
+        if (hostersFromEpisodeApi.isNotEmpty()) return hostersFromEpisodeApi
+
+        // Fallback: HTML parsing
+        return extractHostersFromHtml(body)
+    }
+
+    // ================================================================================================
+    // VIDEO RESOLVER
+    // ================================================================================================
+
+    fun serverVideoResolver(
+        url: String,
+        prefix: String = "",
+        serverName: String? = "",
+    ): List<Video> {
+        return runCatching {
+            val resolvedSource =
+                when {
+                    serverName.isNullOrBlank() -> url
+                    serverName.equals("online", ignoreCase = true) -> url
+                    serverName.length < 3 -> url
+                    else -> serverName
+                }
+
+            val source = resolvedSource.ifEmpty { url }
+            val matched = canonicalServerSlug(source)
+            val displayServer = displayServerName(matched)
+
+            Log.d(
+                "HackStoreMX",
+                "serverVideoResolver: resolved source='$source' matched='$matched' displayServer='$displayServer' prefix='$prefix'",
+            )
+
+            val prefixBase = buildPrefix(prefix, displayServer)
+            val prefixWithSpace = prefixBase.withTrailingSpace()
+
+            return@runCatching extractVideosByServer(matched, url, prefixBase, prefixWithSpace)
+        }.getOrNull() ?: emptyList()
+    }
+
+    // ================================================================================================
+    // VIDEO SORTING
+    // ================================================================================================
+
+    override fun List<Video>.sortVideos(): List<Video> {
+        val preferredQuality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
+        val preferredServer = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
+        val preferredLang = preferences.getString(PREF_LANGUAGE_KEY, PREF_LANGUAGE_DEFAULT)!!
+        val qualityRegex = Regex("""(\d+)p""")
+
+        fun Video.matchesLanguage() = if (videoTitle.contains(preferredLang)) 1 else 0
+
+        fun Video.matchesServer() = if (videoTitle.contains(preferredServer, ignoreCase = true)) 1 else 0
+
+        fun Video.matchesQuality() = if (videoTitle.contains(preferredQuality)) 1 else 0
+
+        fun Video.displayResolution(): Int =
+            resolution
+                ?: qualityRegex
+                    .find(videoTitle)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.toIntOrNull()
+                ?: 0
+
+        return sortedWith(
+            compareBy(
+                { it.matchesLanguage() },
+                { it.matchesServer() },
+                { it.matchesQuality() },
+                { it.displayResolution() },
+            ),
+        ).reversed()
+    }
+
+    // ================================================================================================
+    // FILTERS
+    // ================================================================================================
+
+    override fun getFilterList(): AnimeFilterList =
+        AnimeFilterList(
+            AnimeFilter.Header("La busqueda por texto ignora el filtro"),
+            GenreFilter(),
+        )
+
+    private class GenreFilter :
+        UriPartFilter(
+            "Géneros",
+            arrayOf(
+                Pair("<selecionar>", ""),
+                Pair("Películas", "archives/movies/releases"),
+                Pair("Series", "archives/series/releases"),
+                Pair("Acción", "genres/accion"),
+                Pair("Animación", "genres/animacion"),
+                Pair("Crimen", "genres/crimen"),
+                Pair("Fámilia", "genres/familia"),
+                Pair("Misterio", "genres/misterio"),
+                Pair("Suspenso", "genres/suspenso"),
+                Pair("Aventura", "genres/aventura"),
+                Pair("Ciencia Ficción", "genres/ciencia-ficcion"),
+                Pair("Drama", "genres/drama"),
+                Pair("Fantasía", "genres/fantasia"),
+                Pair("Romance", "genres/romance"),
+                Pair("Terror", "genres/terror"),
+            ),
+        )
+
+    private open class UriPartFilter(
+        displayName: String,
+        vals: Array<Pair<String, String>>,
+    ) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray())
+
+    // ================================================================================================
+    // PREFERENCES
+    // ================================================================================================
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        ListPreference(screen.context)
+            .apply {
+                key = PREF_LANGUAGE_KEY
+                title = "Preferred language"
+                entries = LANGUAGE_LIST
+                entryValues = LANGUAGE_LIST
+                setDefaultValue(PREF_LANGUAGE_DEFAULT)
+                summary = "%s"
+                setOnPreferenceChangeListener { _, newValue ->
+                    val selected = newValue as String
+                    val index = findIndexOfValue(selected)
+                    val entry = entryValues[index] as String
+                    preferences.edit().putString(key, entry).commit()
+                }
+            }.also(screen::addPreference)
+
+        ListPreference(screen.context)
+            .apply {
+                key = PREF_QUALITY_KEY
+                title = "Preferred quality"
+                entries = QUALITY_LIST
+                entryValues = QUALITY_LIST
+                setDefaultValue(PREF_QUALITY_DEFAULT)
+                summary = "%s"
+                setOnPreferenceChangeListener { _, newValue ->
+                    val selected = newValue as String
+                    val index = findIndexOfValue(selected)
+                    val entry = entryValues[index] as String
+                    preferences.edit().putString(key, entry).commit()
+                }
+            }.also(screen::addPreference)
+
+        ListPreference(screen.context)
+            .apply {
+                key = PREF_SERVER_KEY
+                title = "Preferred server"
+                entries = SERVER_LIST
+                entryValues = SERVER_LIST
+                setDefaultValue(PREF_SERVER_DEFAULT)
+                summary = "%s"
+                setOnPreferenceChangeListener { _, newValue ->
+                    val selected = newValue as String
+                    val index = findIndexOfValue(selected)
+                    val entry = entryValues[index] as String
+                    preferences.edit().putString(key, entry).commit()
+                }
+            }.also(screen::addPreference)
+
+        SwitchPreferenceCompat(screen.context)
+            .apply {
+                key = PREF_SPLIT_SEASONS_KEY
+                title = "Split seasons"
+                summary = "Mostrar temporadas como entradas separadas"
+                setDefaultValue(PREF_SPLIT_SEASONS_DEFAULT)
+                isChecked = preferences.splitSeasons
+                setOnPreferenceChangeListener { _, newValue ->
+                    preferences.splitSeasons = newValue as Boolean
+                    true
+                }
+            }.also(screen::addPreference)
+    }
+
+    // ================================================================================================
+    // HELPER METHODS - PARSING
+    // ================================================================================================
+
+    private fun parseAnimeFromJson(
+        item: JsonObject,
+        isSeries: Boolean,
+    ): SAnime? {
+        val title = item["title"]?.jsonPrimitive?.content ?: return null
+        val slug = item["slug"]?.jsonPrimitive?.content ?: return null
+        val images = item["images"]?.jsonObject
+        val poster =
+            images
+                ?.get("poster")
+                ?.jsonPrimitive
+                ?.content
+                .orEmpty()
+
+        val posterUrl =
+            when {
+                poster.isBlank() -> ""
+                poster.contains("/thumbs/") -> "$baseUrl/wp-content/uploads$poster"
+                poster.startsWith("/") -> "$baseUrl$poster"
+                poster.contains("hackstore.mx") -> poster
+                else -> poster
+            }
+
+        return SAnime.create().apply {
+            this.title = title
+            this.thumbnail_url = posterUrl
+            this.fetch_type = preferredFetchType(isSeries)
+            setUrlWithoutDomain(if (isSeries) "/series/$slug" else "/peliculas/$slug")
+        }
+    }
+
+    private fun getSeriesEpisodes(response: Response): List<SEpisode> {
         try {
             val episodes = mutableListOf<SEpisode>()
-            // Intentar obtener el slug de la serie desde la ruta: /series/{slug}
             val pathSegments = response.request.url.pathSegments
             val slugIndex = pathSegments.indexOf("series")
-            val seriesSlug = if (slugIndex != -1 && slugIndex + 1 < pathSegments.size) pathSegments[slugIndex + 1] else null
+            val seriesSlug =
+                if (slugIndex != -1 && slugIndex + 1 < pathSegments.size) {
+                    pathSegments[slugIndex + 1]
+                } else {
+                    null
+                }
 
             if (!seriesSlug.isNullOrBlank()) {
-                // Obtener _id desde el endpoint single/tvshows
                 val infoReq = GET("$baseUrl/wp-api/v1/single/tvshows?slug=$seriesSlug&postType=tvshows", headers)
                 client.newCall(infoReq).execute().use { infoResp ->
-                    val infoBody = infoResp.body?.string().orEmpty()
+                    val infoBody = infoResp.body.string()
                     val infoRoot = runCatching { json.parseToJsonElement(infoBody).jsonObject }.getOrNull()
                     val seriesId =
                         infoRoot
@@ -313,112 +740,111 @@ class Hackstoremx :
                                 ?.jsonPrimitive
                                 ?.contentOrNull
 
-                    val idStr = seriesId
-                    if (!idStr.isNullOrBlank()) {
+                    if (!seriesId.isNullOrBlank()) {
                         val selectedSeason =
                             response.request.url
                                 .queryParameter("season")
                                 ?.toIntOrNull() ?: 1
                         val epsReq =
                             GET(
-                                "$baseUrl/wp-api/v1/single/episodes/list?_id=$idStr&season=$selectedSeason&page=1&postsPerPage=200",
+                                "$baseUrl/wp-api/v1/single/episodes/list?_id=$seriesId&season=$selectedSeason&page=1&postsPerPage=200",
                                 headers,
                             )
+
                         client.newCall(epsReq).execute().use { epsResp ->
-                            val epsBody = epsResp.body?.string().orEmpty()
+                            val epsBody = epsResp.body.string()
                             val epsRoot = runCatching { json.parseToJsonElement(epsBody).jsonObject }.getOrNull()
-                            var posts = epsRoot?.obj("data")?.array("posts")
+                            val posts = epsRoot?.obj("data")?.array("posts")
                             val seasonsArr = epsRoot?.obj("data")?.array("seasons")
-                            val seasonsCount = seasonsArr?.size ?: 1
 
-                            // Helper to parse posts array into episodes list
-                            fun parsePostsArray(postsArray: JsonArray?) {
-                                postsArray?.forEach { elem ->
-                                    val obj = elem.jsonObject
-                                    val epNum = obj["episode_number"]?.jsonPrimitive?.int ?: obj["episode"]?.jsonPrimitive?.int ?: 0
-                                    val seasonNum = obj["season_number"]?.jsonPrimitive?.int ?: selectedSeason
-                                    val slug = obj["slug"]?.jsonPrimitive?.contentOrNull ?: ""
-                                    val title = obj["title"]?.jsonPrimitive?.contentOrNull
-                                    val date = obj["date"]?.jsonPrimitive?.contentOrNull
-                                    val still = obj["still_path"]?.jsonPrimitive?.contentOrNull
+                            posts?.let { parseEpisodesFromPosts(it, selectedSeason, seriesSlug, episodes) }
 
-                                    val ep =
-                                        SEpisode.create().apply {
-                                            episode_number = epNum.toFloat()
-                                            name = buildEpisodeName(seasonNum, epNum, title)
-                                            summary = obj["overview"]?.jsonPrimitive?.contentOrNull
-                                            preview_url = resolveEpisodeImage(still)
-                                            date_upload = date?.let {
-                                                runCatching {
-                                                    // API date format: "2025-10-09 16:07:14"
-                                                    val normalized = it.replace(' ', 'T') + ".000Z"
-                                                    DATE_FORMATTER.parse(normalized)?.time
-                                                }.getOrNull() ?: 0L
-                                            } ?: 0L
-                                            setUrlWithoutDomain("/series/$seriesSlug/seasons/$seasonNum/episodes/$slug")
-                                        }
-                                    episodes.add(ep)
-                                }
-                            }
-
-                            // Parse initial posts
-                            parsePostsArray(posts)
-
-                            // If no posts were returned for the requested season but the API lists other seasons,
-                            // try fetching episodes from the first available season as a fallback (common when API returns seasons like ["2"]).
-                            if (episodes.isEmpty() && (posts == null || posts.isEmpty()) && !seasonsArr.isNullOrEmpty()) {
-                                val firstSeasonText = seasonsArr.firstOrNull()?.jsonPrimitive?.contentOrNull
-                                val firstSeasonNum = firstSeasonText?.toIntOrNull()
+                            // Fallback if no episodes found
+                            if (episodes.isEmpty() && !seasonsArr.isNullOrEmpty()) {
+                                val firstSeasonNum =
+                                    seasonsArr
+                                        .firstOrNull()
+                                        ?.jsonPrimitive
+                                        ?.contentOrNull
+                                        ?.toIntOrNull()
                                 if (firstSeasonNum != null && firstSeasonNum != selectedSeason) {
-                                    val fallbackReq =
-                                        GET(
-                                            "$baseUrl/wp-api/v1/single/episodes/list?_id=$idStr&season=$firstSeasonNum&page=1&postsPerPage=200",
-                                            headers,
-                                        )
-                                    client.newCall(fallbackReq).execute().use { fallbackResp ->
-                                        val fallbackBody = fallbackResp.body?.string().orEmpty()
-                                        val fallbackRoot = runCatching { json.parseToJsonElement(fallbackBody).jsonObject }.getOrNull()
-                                        val fallbackPosts = fallbackRoot?.obj("data")?.array("posts")
-                                        parsePostsArray(fallbackPosts)
-                                    }
+                                    fetchFallbackSeasonEpisodes(seriesId, firstSeasonNum, seriesSlug, episodes)
                                 }
                             }
-                            if (episodes.isNotEmpty()) return episodes.sortedWith(compareBy({ it.episode_number })).reversed()
+
+                            if (episodes.isNotEmpty()) {
+                                return episodes.sortedWith(compareBy { it.episode_number }).reversed()
+                            }
                         }
                     }
                 }
             }
         } catch (e: Exception) {
+            Log.e("HackStoreMX", "getSeriesEpisodes failed: ${e.message}")
         }
+
         return emptyList()
     }
 
-    override suspend fun getSeasonList(anime: SAnime): List<SAnime> {
-        if (anime.fetch_type != FetchType.Seasons) return emptyList()
+    private fun parseEpisodesFromPosts(
+        posts: JsonArray,
+        selectedSeason: Int,
+        seriesSlug: String,
+        episodes: MutableList<SEpisode>,
+    ) {
+        posts.forEach { elem ->
+            val obj = elem.jsonObject
+            val epNum =
+                obj["episode_number"]?.jsonPrimitive?.int
+                    ?: obj["episode"]?.jsonPrimitive?.int ?: 0
+            val seasonNum = obj["season_number"]?.jsonPrimitive?.int ?: selectedSeason
+            val slug = obj["slug"]?.jsonPrimitive?.contentOrNull ?: ""
+            val title = obj["title"]?.jsonPrimitive?.contentOrNull
+            val date = obj["date"]?.jsonPrimitive?.contentOrNull
+            val still = obj["still_path"]?.jsonPrimitive?.contentOrNull
 
-        val request = GET(anime.url.toAbsoluteUrl(), headers)
-        return client.newCall(request).execute().use { seasonListParse(it) }
+            val ep =
+                SEpisode.create().apply {
+                    episode_number = epNum.toFloat()
+                    name = buildEpisodeName(seasonNum, epNum, title)
+                    summary = obj["overview"]?.jsonPrimitive?.contentOrNull
+                    preview_url = resolveEpisodeImage(still)
+                    date_upload = date?.let {
+                        runCatching {
+                            val normalized = it.replace(' ', 'T') + ".000Z"
+                            DATE_FORMATTER.parse(normalized)?.time
+                        }.getOrNull() ?: 0L
+                    } ?: 0L
+                    setUrlWithoutDomain("/series/$seriesSlug/seasons/$seasonNum/episodes/$slug")
+                }
+            episodes.add(ep)
+        }
     }
 
-    override fun seasonListParse(response: Response): List<SAnime> {
-        Log.e("HackStoreMX", "seasonListParse: url=${response.request.url}")
-        val pageProps = response.extractPageProps()
-        val meta = pageProps?.toGnulaMeta()
-        if (meta != null) {
-            Log.e("HackStoreMX", "seasonListParse: found pageProps meta, isMovie=${meta.isMovie}, seasons=${meta.seasons.size}")
-            if (meta.isMovie) return emptyList()
-
-            val basePath =
-                response.request.url
-                    .toString()
-                    .removePrefix(baseUrl)
-
-            return meta.seasons.map { season ->
-                season.toSAnime(basePath, meta, baseUrl)
+    private fun fetchFallbackSeasonEpisodes(
+        seriesId: String,
+        seasonNum: Int,
+        seriesSlug: String,
+        episodes: MutableList<SEpisode>,
+    ) {
+        try {
+            val fallbackReq =
+                GET(
+                    "$baseUrl/wp-api/v1/single/episodes/list?_id=$seriesId&season=$seasonNum&page=1&postsPerPage=200",
+                    headers,
+                )
+            client.newCall(fallbackReq).execute().use { fallbackResp ->
+                val fallbackBody = fallbackResp.body.string()
+                val fallbackRoot = runCatching { json.parseToJsonElement(fallbackBody).jsonObject }.getOrNull()
+                val fallbackPosts = fallbackRoot?.obj("data")?.array("posts")
+                fallbackPosts?.let { parseEpisodesFromPosts(it, seasonNum, seriesSlug, episodes) }
             }
+        } catch (e: Exception) {
+            Log.e("HackStoreMX", "fetchFallbackSeasonEpisodes failed: ${e.message}")
         }
+    }
 
-        // Fallback: intentar obtener las temporadas desde la API pública si la página es una SPA
+    private fun getSeasonListFromApi(response: Response): List<SAnime> {
         try {
             val pathSegments = response.request.url.pathSegments
             val slugIndex =
@@ -427,31 +853,35 @@ class Hackstoremx :
                     pathSegments.contains("series") -> pathSegments.indexOf("series")
                     else -> -1
                 }
-            val slug = if (slugIndex != -1 && slugIndex + 1 < pathSegments.size) pathSegments[slugIndex + 1] else pathSegments.lastOrNull()
+            val slug =
+                if (slugIndex != -1 && slugIndex + 1 < pathSegments.size) {
+                    pathSegments[slugIndex + 1]
+                } else {
+                    pathSegments.lastOrNull()
+                }
+
             val postType = if (pathSegments.contains("peliculas")) "movies" else "tvshows"
+
             if (!slug.isNullOrBlank()) {
                 val infoReq = GET("$baseUrl/wp-api/v1/single/$postType?slug=$slug&postType=$postType", headers)
                 client.newCall(infoReq).execute().use { infoResp ->
-                    val infoBody = infoResp.body?.string().orEmpty()
+                    val infoBody = infoResp.body.string()
                     val infoRoot = runCatching { json.parseToJsonElement(infoBody).jsonObject }.getOrNull()
                     val data = infoRoot?.obj("data") ?: return emptyList()
 
                     var seasonsArr = data.array("seasons")
-                    Log.e(
-                        "HackStoreMX",
-                        "seasonListParse: api single/$postType for slug=$slug returned seasons=${seasonsArr?.toString()}",
-                    )
-                    // If single endpoint returned no seasons, try to fetch seasons from episodes/list endpoint using _id
+                    Log.e("HackStoreMX", "seasonListParse: api single/$postType for slug=$slug returned seasons=${seasonsArr?.toString()}")
+
+                    // If no seasons, try episodes/list endpoint
                     if (seasonsArr == null || seasonsArr.isEmpty()) {
                         val seriesId =
                             data["_id"]?.jsonPrimitive?.contentOrNull
                                 ?: data["id"]?.jsonPrimitive?.contentOrNull
                         if (!seriesId.isNullOrBlank()) {
                             try {
-                                val epsInfoReq =
-                                    GET("$baseUrl/wp-api/v1/single/episodes/list?_id=$seriesId&page=1&postsPerPage=1", headers)
+                                val epsInfoReq = GET("$baseUrl/wp-api/v1/single/episodes/list?_id=$seriesId&page=1&postsPerPage=1", headers)
                                 client.newCall(epsInfoReq).execute().use { epsInfoResp ->
-                                    val epsInfoBody = epsInfoResp.body?.string().orEmpty()
+                                    val epsInfoBody = epsInfoResp.body.string()
                                     val epsInfoRoot = runCatching { json.parseToJsonElement(epsInfoBody).jsonObject }.getOrNull()
                                     val epsData = epsInfoRoot?.obj("data")
                                     val epsSeasons = epsData?.array("seasons")
@@ -470,235 +900,175 @@ class Hackstoremx :
                     }
 
                     val basePath =
-                        if (response.request.url.toString().startsWith(
-                                baseUrl,
-                            )
+                        if (response.request.url
+                                .toString()
+                                .startsWith(baseUrl)
                         ) {
-                            response.request.url.toString().removePrefix(
-                                baseUrl,
-                            )
+                            response.request.url
+                                .toString()
+                                .removePrefix(baseUrl)
                         } else {
                             "/${if (postType == "movies") "peliculas" else "series"}/$slug"
                         }
 
                     return (seasonsArr as Iterable<Any?>).mapNotNull { seasonElem ->
-                        // Parse season element which can be an object or primitive (e.g. "1")
-                        var seasonNum: Int
-                        var seasonTitle: String? = null
-                        var seasonOverview: String? = null
-                        var seasonSlugName: String? = null
-                        var seasonSlugSeason: String? = null
-
-                        when (seasonElem) {
-                            is JsonObject -> {
-                                val seasonObj = seasonElem
-                                seasonNum = seasonObj.long("number")?.toInt()
-                                    ?: seasonObj.string("number")?.toIntOrNull()
-                                    ?: return@mapNotNull null
-                                seasonTitle = seasonObj.string("title")
-                                seasonOverview = seasonObj.string("overview") ?: data.string("overview")
-                                val slugObj = seasonObj.obj("slug")
-                                seasonSlugName = slugObj?.string("name")
-                                seasonSlugSeason = slugObj?.string("season") ?: seasonNum.toString()
-                            }
-
-                            is JsonPrimitive -> {
-                                val text = seasonElem.jsonPrimitive.contentOrNull ?: return@mapNotNull null
-                                seasonNum = text.toIntOrNull() ?: return@mapNotNull null
-                                seasonOverview = data.string("overview")
-                                seasonSlugSeason = seasonNum.toString()
-                            }
-
-                            else -> {
-                                return@mapNotNull null
-                            }
-                        }
-
-                        val gnulaSeason =
-                            GnulaSeason(
-                                number = seasonNum,
-                                title = seasonTitle,
-                                overview = seasonOverview,
-                                slugName = seasonSlugName,
-                                slugSeason = seasonSlugSeason,
-                                episodes = emptyList(),
-                            )
-
-                        val gnulaMeta =
-                            GnulaMeta(
-                                title = data["title"]?.jsonPrimitive?.contentOrNull ?: slug.orEmpty(),
-                                overview = data.string("overview"),
-                                poster = data.obj("images")?.string("poster")?.optimizeImageUrl(),
-                                genres = emptyList(),
-                                director = data.string("director"),
-                                cast = emptyList(),
-                                seasons = listOf(gnulaSeason),
-                                isMovie = data["type"]?.jsonPrimitive?.contentOrNull?.equals("movies", true) == true,
-                            )
-
-                        gnulaSeason.toSAnime(basePath, gnulaMeta, baseUrl)
+                        parseSeasonElement(seasonElem, data, slug, basePath)
                     }
                 }
             }
         } catch (e: Exception) {
-            // ignore and fallthrough to empty list
+            Log.e("HackStoreMX", "getSeasonListFromApi failed: ${e.message}")
         }
 
         return emptyList()
     }
 
-    override fun hosterListParse(response: Response): List<Hoster> {
-        // Leer el body una sola vez para evitar 'closed' al parsear múltiples veces
-        val body = response.body?.string().orEmpty()
+    private fun parseSeasonElement(
+        seasonElem: Any?,
+        data: JsonObject,
+        slug: String,
+        basePath: String,
+    ): SAnime? {
+        var seasonNum: Int
+        var seasonTitle: String? = null
+        var seasonOverview: String?
+        var seasonSlugName: String? = null
+        var seasonSlugSeason: String?
 
-        // Primero intentar extraer hosters desde pageProps (SPA / JSON embebido)
-        val pageProps = extractPagePropsFromString(body)
-        if (pageProps != null) {
-            try {
-                val hosterGroups = LinkedHashMap<Pair<String, String>, MutableList<Video>>()
+        when (seasonElem) {
+            is JsonObject -> {
+                seasonNum = seasonElem.long("number")?.toInt()
+                    ?: seasonElem.string("number")?.toIntOrNull()
+                    ?: return null
+                seasonTitle = seasonElem.string("title")
+                seasonOverview = seasonElem.string("overview") ?: data.string("overview")
+                val slugObj = seasonElem.obj("slug")
+                seasonSlugName = slugObj?.string("name")
+                seasonSlugSeason = slugObj?.string("season") ?: seasonNum.toString()
+            }
 
-                // Buscar arrays en el JSON que puedan contener entradas de hosters (objetos con 'result' o 'cyberlocker')
-                fun findArraysWithKeys(
-                    element: JsonElement,
-                    keys: Set<String>,
-                    out: MutableList<JsonArray>,
-                ) {
-                    when (element) {
-                        is JsonObject -> {
-                            element.values.forEach { v -> findArraysWithKeys(v, keys, out) }
-                        }
+            is JsonPrimitive -> {
+                val text = seasonElem.jsonPrimitive.contentOrNull ?: return null
+                seasonNum = text.toIntOrNull() ?: return null
+                seasonOverview = data.string("overview")
+                seasonSlugSeason = seasonNum.toString()
+            }
 
-                        is JsonArray -> {
-                            // Si el array contiene objetos que tengan alguna de las keys, lo consideramos candidato
-                            val objs = element.mapNotNull { it.jsonObjectOrNull() }
-                            if (objs.isNotEmpty() && objs.any { obj -> keys.any { k -> obj.get(k) != null } }) {
-                                out.add(element)
-                            } else {
-                                // Recurse into elements
-                                element.forEach { findArraysWithKeys(it, keys, out) }
-                            }
-                        }
-
-                        else -> {
-                            return
-                        }
-                    }
-                }
-
-                val candidates = mutableListOf<JsonArray>()
-                findArraysWithKeys(pageProps, setOf("result", "cyberlocker", "url", "link", "source"), candidates)
-
-                // Usar collectHosters sobre cada array candidata
-                candidates.forEach { arr ->
-                    // preferimos no poner etiqueta de idioma si no está disponible
-                    arr.collectHosters("", hosterGroups)
-                }
-
-                // Convertir hosterGroups a lista de Hosters
-                if (hosterGroups.isNotEmpty()) {
-                    return hosterGroups.map { (key, videos) ->
-                        val (lang, server) = key
-                        val displayName =
-                            when {
-                                lang.isNotBlank() && server.isNotBlank() -> "${lang.trim()} $server"
-                                lang.isNotBlank() -> lang
-                                else -> server
-                            }
-                        Hoster(hosterName = displayName.ifBlank { "Enlace" }, videoList = videos)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("HackStoreMX", "hosterListParse: pageProps hoster extraction failed: ${e.message}")
+            else -> {
+                return null
             }
         }
 
-        // Segundo intento: si la respuesta es del endpoint /player, parsear data.embeds directamente
+        val gnulaSeason =
+            GnulaSeason(
+                number = seasonNum,
+                title = seasonTitle,
+                overview = seasonOverview,
+                slugName = seasonSlugName,
+                slugSeason = seasonSlugSeason,
+                episodes = emptyList(),
+            )
+
+        val gnulaMeta =
+            GnulaMeta(
+                title = data["title"]?.jsonPrimitive?.contentOrNull ?: slug,
+                overview = data.string("overview"),
+                poster = data.obj("images")?.string("poster")?.optimizeImageUrl(),
+                genres = emptyList(),
+                director = data.string("director"),
+                cast = emptyList(),
+                seasons = listOf(gnulaSeason),
+                isMovie = data["type"]?.jsonPrimitive?.contentOrNull?.equals("movies", true) == true,
+            )
+
+        return gnulaSeason.toSAnime(basePath, gnulaMeta, baseUrl)
+    }
+
+    // ================================================================================================
+    // HELPER METHODS - HOSTER EXTRACTION
+    // ================================================================================================
+
+    private fun extractPagePropsFromString(html: String): JsonObject? {
+        val regex = Regex("""<script[^>]*>\s*(\{[\s\S]*?\})\s*</script>""", RegexOption.DOT_MATCHES_ALL)
+        val match = regex.find(html)
+        val jsonString = match?.groups?.get(1)?.value ?: return null
+        val root = runCatching { json.parseToJsonElement(jsonString).jsonObject }.getOrNull() ?: return null
+        val propsObj = root["props"] as? JsonObject ?: return null
+        return propsObj["pageProps"] as? JsonObject
+    }
+
+    private fun extractHostersFromPageProps(pageProps: JsonObject): List<Hoster> {
+        try {
+            val hosterGroups = LinkedHashMap<Pair<String, String>, MutableList<Video>>()
+
+            fun findArraysWithKeys(
+                element: JsonElement,
+                keys: Set<String>,
+                out: MutableList<JsonArray>,
+            ) {
+                when (element) {
+                    is JsonObject -> {
+                        element.values.forEach { v -> findArraysWithKeys(v, keys, out) }
+                    }
+
+                    is JsonArray -> {
+                        val objs = element.mapNotNull { it.jsonObjectOrNull() }
+                        if (objs.isNotEmpty() && objs.any { obj -> keys.any { k -> obj[k] != null } }) {
+                            out.add(element)
+                        } else {
+                            element.forEach { findArraysWithKeys(it, keys, out) }
+                        }
+                    }
+
+                    else -> {
+                        return
+                    }
+                }
+            }
+
+            val candidates = mutableListOf<JsonArray>()
+            findArraysWithKeys(pageProps, setOf("result", "cyberlocker", "url", "link", "source"), candidates)
+
+            candidates.forEach { arr ->
+                arr.collectHosters("", hosterGroups)
+            }
+
+            if (hosterGroups.isNotEmpty()) {
+                return hosterGroups.map { (key, videos) ->
+                    val (lang, server) = key
+                    val displayName =
+                        when {
+                            lang.isNotBlank() && server.isNotBlank() -> "${lang.trim()} $server"
+                            lang.isNotBlank() -> lang
+                            else -> server
+                        }
+                    Hoster(hosterName = displayName.ifBlank { "Enlace" }, videoList = videos)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("HackStoreMX", "extractHostersFromPageProps failed: ${e.message}")
+        }
+
+        return emptyList()
+    }
+
+    private fun extractHostersFromPlayer(
+        body: String,
+        response: Response,
+    ): List<Hoster> {
         try {
             val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
             val data = root?.obj("data")
             val embeds = data?.array("embeds")
+
             Log.d("HackStoreMX", "hosterListParse: /player root parsed=${root != null}, embeds_count=${embeds?.size ?: 0}")
+
             if (embeds.isNullOrEmpty()) {
-                // Log the whole data object for diagnosing alternative fields (e.g., post, player, sources)
-                try {
-                    Log.d("HackStoreMX", "hosterListParse: /player data dump: ${data?.toString()}")
-                } catch (e: Exception) {
-                    Log.d("HackStoreMX", "hosterListParse: /player data dump failed: ${e.message}")
-                }
-
-                // If the /player response didn't include embeds, sometimes it returns metadata with
-                // episode._id or serie._id. Try querying the player endpoint for those IDs (skipping
-                // the original postId) to locate embeds.
-                try {
-                    val origPostId = response.request.url.queryParameter("postId")
-                    val epId =
-                        data
-                            ?.obj("episode")
-                            ?.get("_id")
-                            ?.jsonPrimitive
-                            ?.contentOrNull
-                    val serieId =
-                        data
-                            ?.obj("serie")
-                            ?.get("_id")
-                            ?.jsonPrimitive
-                            ?.contentOrNull
-                    val candidates = listOfNotNull(epId, serieId).distinct().filter { it != origPostId }
-                    for (candidate in candidates) {
-                        try {
-                            val candidateReq = GET("$baseUrl/wp-api/v1/player?postId=$candidate", headers)
-                            client.newCall(candidateReq).execute().use { candResp ->
-                                val candBody = candResp.body?.string().orEmpty()
-                                val candRoot = runCatching { json.parseToJsonElement(candBody).jsonObject }.getOrNull()
-                                val candData = candRoot?.obj("data")
-                                val candEmbeds = candData?.array("embeds")
-                                Log.d(
-                                    "HackStoreMX",
-                                    "hosterListParse: tried candidate postId=$candidate, embeds_count=${candEmbeds?.size ?: 0}",
-                                )
-                                if (!candEmbeds.isNullOrEmpty()) {
-                                    val hosterMap = LinkedHashMap<Pair<String, String>, MutableList<Video>>()
-                                    candEmbeds.forEach { el ->
-                                        val obj = el.jsonObjectOrNull() ?: return@forEach
-                                        val url = obj.string("url") ?: obj.string("embed") ?: return@forEach
-                                        val server = obj.string("server") ?: obj.string("cyberlocker") ?: ""
-                                        val lang = obj.string("lang") ?: obj.string("language") ?: ""
-
-                                        val videos = serverVideoResolver(url, buildPrefix(lang, displayServerName(server)), server)
-                                        if (videos.isNotEmpty()) {
-                                            val key = lang to displayServerName(server.ifBlank { url })
-                                            val group = hosterMap.getOrPut(key) { mutableListOf() }
-                                            group.addAll(videos)
-                                        }
-                                    }
-                                    if (hosterMap.isNotEmpty()) {
-                                        Log.d(
-                                            "HackStoreMX",
-                                            "hosterListParse: candidate postId=$candidate produced hosterMap with ${hosterMap.size} groups",
-                                        )
-                                        return hosterMap.map { (key, videos) ->
-                                            val (lang, server) = key
-                                            val displayName =
-                                                when {
-                                                    lang.isNotBlank() && server.isNotBlank() -> "${lang.trim()} $server"
-                                                    lang.isNotBlank() -> lang
-                                                    else -> server
-                                                }
-                                            Hoster(hosterName = displayName.ifBlank { "Enlace" }, videoList = videos)
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.d("HackStoreMX", "hosterListParse: candidate postId=$candidate request failed: ${e.message}")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.d("HackStoreMX", "hosterListParse: candidate postId lookup failed: ${e.message}")
-                }
+                Log.d("HackStoreMX", "hosterListParse: /player data dump: ${data?.toString()}")
+                return tryAlternativePlayerEndpoints(data, response.request.url.queryParameter("postId"))
             }
-            if (!embeds.isNullOrEmpty()) {
-                // Agrupar por servidor/lang como en el resto
+
+            if (!embeds.isEmpty()) {
                 val hosterMap = LinkedHashMap<Pair<String, String>, MutableList<Video>>()
                 embeds.forEach { el ->
                     val obj = el.jsonObjectOrNull() ?: return@forEach
@@ -706,13 +1076,13 @@ class Hackstoremx :
                     Log.d("HackStoreMX", "hosterListParse: player embed url=$url")
                     val server = obj.string("server") ?: obj.string("cyberlocker") ?: ""
                     val lang = obj.string("lang") ?: obj.string("language") ?: ""
-                    val quality = obj.string("quality") ?: ""
 
                     val videos = serverVideoResolver(url, buildPrefix(lang, displayServerName(server)), server)
                     Log.d(
                         "HackStoreMX",
                         "hosterListParse: serverVideoResolver returned ${videos.size} videos for url=$url server=$server lang=$lang",
                     )
+
                     if (videos.isNotEmpty()) {
                         val key = lang to displayServerName(server.ifBlank { url })
                         val group = hosterMap.getOrPut(key) { mutableListOf() }
@@ -734,7 +1104,6 @@ class Hackstoremx :
                     }
                 }
             } else {
-                // If embeds is empty, try to parse other possible hoster structures in the JSON
                 val altHosters = parseHostersFromEpisodeJson(root)
                 if (altHosters.isNotEmpty()) {
                     Log.d(
@@ -745,15 +1114,100 @@ class Hackstoremx :
                 }
             }
         } catch (e: Exception) {
-            Log.e("HackStoreMX", "hosterListParse: /player embeds extraction failed: ${e.message}")
+            Log.e("HackStoreMX", "extractHostersFromPlayer failed: ${e.message}")
         }
 
-        // Si no se obtuvo nada desde pageProps, intentar obtener hosters desde el endpoint de detalle del episodio
+        return emptyList()
+    }
+
+    private fun tryAlternativePlayerEndpoints(
+        data: JsonObject?,
+        origPostId: String?,
+    ): List<Hoster> {
+        try {
+            val epId =
+                data
+                    ?.obj("episode")
+                    ?.get("_id")
+                    ?.jsonPrimitive
+                    ?.contentOrNull
+            val serieId =
+                data
+                    ?.obj("serie")
+                    ?.get("_id")
+                    ?.jsonPrimitive
+                    ?.contentOrNull
+            val candidates = listOfNotNull(epId, serieId).distinct().filter { it != origPostId }
+
+            for (candidate in candidates) {
+                try {
+                    val candidateReq = GET("$baseUrl/wp-api/v1/player?postId=$candidate", headers)
+                    client.newCall(candidateReq).execute().use { candResp ->
+                        val candBody = candResp.body.string()
+                        val candRoot = runCatching { json.parseToJsonElement(candBody).jsonObject }.getOrNull()
+                        val candData = candRoot?.obj("data")
+                        val candEmbeds = candData?.array("embeds")
+
+                        Log.d("HackStoreMX", "hosterListParse: tried candidate postId=$candidate, embeds_count=${candEmbeds?.size ?: 0}")
+
+                        if (!candEmbeds.isNullOrEmpty()) {
+                            val hosterMap = LinkedHashMap<Pair<String, String>, MutableList<Video>>()
+                            candEmbeds.forEach { el ->
+                                val obj = el.jsonObjectOrNull() ?: return@forEach
+                                val url = obj.string("url") ?: obj.string("embed") ?: return@forEach
+                                val server = obj.string("server") ?: obj.string("cyberlocker") ?: ""
+                                val lang = obj.string("lang") ?: obj.string("language") ?: ""
+
+                                val videos = serverVideoResolver(url, buildPrefix(lang, displayServerName(server)), server)
+                                if (videos.isNotEmpty()) {
+                                    val key = lang to displayServerName(server.ifBlank { url })
+                                    val group = hosterMap.getOrPut(key) { mutableListOf() }
+                                    group.addAll(videos)
+                                }
+                            }
+
+                            if (hosterMap.isNotEmpty()) {
+                                Log.d(
+                                    "HackStoreMX",
+                                    "hosterListParse: candidate postId=$candidate produced hosterMap with ${hosterMap.size} groups",
+                                )
+                                return hosterMap.map { (key, videos) ->
+                                    val (lang, server) = key
+                                    val displayName =
+                                        when {
+                                            lang.isNotBlank() && server.isNotBlank() -> "${lang.trim()} $server"
+                                            lang.isNotBlank() -> lang
+                                            else -> server
+                                        }
+                                    Hoster(hosterName = displayName.ifBlank { "Enlace" }, videoList = videos)
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.d("HackStoreMX", "hosterListParse: candidate postId=$candidate request failed: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.d("HackStoreMX", "hosterListParse: candidate postId lookup failed: ${e.message}")
+        }
+
+        return emptyList()
+    }
+
+    private fun extractHostersFromEpisodeApi(response: Response): List<Hoster> {
         try {
             val pathSegments = response.request.url.pathSegments
             val episodeIndex = pathSegments.indexOf("episodes")
-            val episodeSlug = if (episodeIndex != -1 && episodeIndex + 1 < pathSegments.size) pathSegments[episodeIndex + 1] else null
-            val qId = response.request.url.queryParameter("_id") ?: response.request.url.queryParameter("postId")
+            val episodeSlug =
+                if (episodeIndex != -1 && episodeIndex + 1 < pathSegments.size) {
+                    pathSegments[episodeIndex + 1]
+                } else {
+                    null
+                }
+            val qId =
+                response.request.url.queryParameter("_id")
+                    ?: response.request.url.queryParameter("postId")
 
             if (!qId.isNullOrBlank() || !episodeSlug.isNullOrBlank()) {
                 val infoUrl =
@@ -761,16 +1215,15 @@ class Hackstoremx :
                         !qId.isNullOrBlank() -> "$baseUrl/wp-api/v1/single/episodes?_id=$qId"
                         else -> "$baseUrl/wp-api/v1/single/episodes?slug=$episodeSlug&postType=episodes"
                     }
+
                 val infoReq = GET(infoUrl, headers)
                 client.newCall(infoReq).execute().use { infoResp ->
-                    val infoBody = infoResp.body?.string().orEmpty()
+                    val infoBody = infoResp.body.string()
                     val infoRoot = runCatching { json.parseToJsonElement(infoBody).jsonObject }.getOrNull()
-                    // El endpoint /player devuelve data.embeds con structure [{url, server, lang, quality, ...}]
-                    // parseHostersFromEpisodeJson maneja varios formatos; también intentamos aquí detectar el formato player directamente
                     val hostersFromApi = parseHostersFromEpisodeJson(infoRoot)
                     if (hostersFromApi.isNotEmpty()) return hostersFromApi
 
-                    // Si no encontramos hosters, intentar obtener postId/_id buscando recursivamente en el JSON
+                    // Try to find postId recursively
                     fun findIdRecursive(el: JsonElement?): String? {
                         if (el == null) return null
                         when (el) {
@@ -801,56 +1254,67 @@ class Hackstoremx :
                     Log.d("HackStoreMX", "hosterListParse: resolved postIdCandidate=$postIdCandidate from infoRoot")
 
                     if (!postIdCandidate.isNullOrBlank()) {
-                        try {
-                            val playerReq = GET("$baseUrl/wp-api/v1/player?postId=$postIdCandidate", headers)
-                            client.newCall(playerReq).execute().use { playerResp ->
-                                val playerBody = playerResp.body?.string().orEmpty()
-                                val playerRoot = runCatching { json.parseToJsonElement(playerBody).jsonObject }.getOrNull()
-                                val playerData = playerRoot?.obj("data")
-                                val playerEmbeds = playerData?.array("embeds")
-                                if (!playerEmbeds.isNullOrEmpty()) {
-                                    val hosterMap = LinkedHashMap<Pair<String, String>, MutableList<Video>>()
-                                    playerEmbeds.forEach { el ->
-                                        val obj = el.jsonObjectOrNull() ?: return@forEach
-                                        val url = obj.string("url") ?: obj.string("embed") ?: return@forEach
-                                        val server = obj.string("server") ?: obj.string("cyberlocker") ?: ""
-                                        val lang = obj.string("lang") ?: obj.string("language") ?: ""
+                        return tryPlayerEndpointWithPostId(postIdCandidate)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("HackStoreMX", "extractHostersFromEpisodeApi failed: ${e.message}")
+        }
 
-                                        val videos = serverVideoResolver(url, buildPrefix(lang, displayServerName(server)), server)
-                                        if (videos.isNotEmpty()) {
-                                            val key = lang to displayServerName(server.ifBlank { url })
-                                            val group = hosterMap.getOrPut(key) { mutableListOf() }
-                                            group.addAll(videos)
-                                        }
-                                    }
-                                    if (hosterMap.isNotEmpty()) {
-                                        return hosterMap.map { (key, videos) ->
-                                            val (lang, server) = key
-                                            val displayName =
-                                                when {
-                                                    lang.isNotBlank() && server.isNotBlank() -> "${lang.trim()} $server"
-                                                    lang.isNotBlank() -> lang
-                                                    else -> server
-                                                }
-                                            Hoster(hosterName = displayName.ifBlank { "Enlace" }, videoList = videos)
-                                        }
-                                    }
+        return emptyList()
+    }
+
+    private fun tryPlayerEndpointWithPostId(postId: String): List<Hoster> {
+        try {
+            val playerReq = GET("$baseUrl/wp-api/v1/player?postId=$postId", headers)
+            client.newCall(playerReq).execute().use { playerResp ->
+                val playerBody = playerResp.body.string()
+                val playerRoot = runCatching { json.parseToJsonElement(playerBody).jsonObject }.getOrNull()
+                val playerData = playerRoot?.obj("data")
+                val playerEmbeds = playerData?.array("embeds")
+
+                if (!playerEmbeds.isNullOrEmpty()) {
+                    val hosterMap = LinkedHashMap<Pair<String, String>, MutableList<Video>>()
+                    playerEmbeds.forEach { el ->
+                        val obj = el.jsonObjectOrNull() ?: return@forEach
+                        val url = obj.string("url") ?: obj.string("embed") ?: return@forEach
+                        val server = obj.string("server") ?: obj.string("cyberlocker") ?: ""
+                        val lang = obj.string("lang") ?: obj.string("language") ?: ""
+
+                        val videos = serverVideoResolver(url, buildPrefix(lang, displayServerName(server)), server)
+                        if (videos.isNotEmpty()) {
+                            val key = lang to displayServerName(server.ifBlank { url })
+                            val group = hosterMap.getOrPut(key) { mutableListOf() }
+                            group.addAll(videos)
+                        }
+                    }
+
+                    if (hosterMap.isNotEmpty()) {
+                        return hosterMap.map { (key, videos) ->
+                            val (lang, server) = key
+                            val displayName =
+                                when {
+                                    lang.isNotBlank() && server.isNotBlank() -> "${lang.trim()} $server"
+                                    lang.isNotBlank() -> lang
+                                    else -> server
                                 }
-                            }
-                        } catch (e: Exception) {
-                            Log.e("HackStoreMX", "hosterListParse: player endpoint fallback failed: ${e.message}")
+                            Hoster(hosterName = displayName.ifBlank { "Enlace" }, videoList = videos)
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e("HackStoreMX", "hosterListParse: episode API hoster extraction failed: ${e.message}")
+            Log.e("HackStoreMX", "tryPlayerEndpointWithPostId failed: ${e.message}")
         }
 
-        // Fallback: parseo por HTML cuando no sea SPA o no encontremos nada en JSON
-        val document = org.jsoup.Jsoup.parse(body)
+        return emptyList()
+    }
+
+    private fun extractHostersFromHtml(body: String): List<Hoster> {
+        val document = Jsoup.parse(body)
         val hosters = mutableListOf<Hoster>()
-        // Buscar todos los enlaces de video en la página del episodio
+
         document.select(".enlaces a, .links a, .player a").forEach { el ->
             val url = el.attr("href")
             val name = el.text().ifBlank { "Enlace" }
@@ -859,417 +1323,82 @@ class Hackstoremx :
                 hosters.add(Hoster(hosterName = name, videoList = videos))
             }
         }
+
         return hosters
     }
 
-    // --------------------------------Video extractors------------------------------------
-    private val voeExtractor by lazy { VoeExtractor(client, headers) }
-    private val okruExtractor by lazy { OkruExtractor(client) }
-    private val filemoonExtractor by lazy { FilemoonExtractor(client) }
-    private val uqloadExtractor by lazy { UqloadExtractor(client) }
-    private val mp4uploadExtractor by lazy { Mp4uploadExtractor(client) }
-    private val streamWishExtractor by lazy { StreamWishExtractor(client, headers) }
-    private val doodExtractor by lazy { DoodExtractor(client) }
-    private val streamlareExtractor by lazy { StreamlareExtractor(client) }
-    private val yourUploadExtractor by lazy { YourUploadExtractor(client) }
-    private val burstCloudExtractor by lazy { BurstCloudExtractor(client) }
-    private val fastreamExtractor by lazy { FastreamExtractor(client, headers) }
-    private val upstreamExtractor by lazy { UpstreamExtractor(client) }
-    private val streamTapeExtractor by lazy { StreamTapeExtractor(client) }
-    private val vidHideExtractor by lazy { VidHideExtractor(client, headers) }
-    private val streamSilkExtractor by lazy { StreamSilkExtractor(client) }
-    private val vidGuardExtractor by lazy { VidGuardExtractor(client) }
-    private val universalExtractor by lazy { UniversalExtractor(client) }
+    private fun parseHostersFromEpisodeJson(root: JsonObject?): List<Hoster> {
+        if (root == null) return emptyList()
 
-    fun serverVideoResolver(
-        url: String,
-        prefix: String = "",
-        serverName: String? = "",
-    ): List<Video> {
-        return runCatching {
-            // If serverName is a generic label like "Online", prefer to detect provider from the URL
-            val resolvedSource =
-                when {
-                    serverName.isNullOrBlank() -> url
-                    serverName.equals("online", ignoreCase = true) -> url
-                    serverName.length < 3 -> url
-                    else -> serverName
-                }
-            val source = resolvedSource.ifEmpty { url }
-            val matched = canonicalServerSlug(source)
-            val displayServer = displayServerName(matched)
-            Log.d(
-                "HackStoreMX",
-                "serverVideoResolver: resolved source='$source' matched='$matched' displayServer='$displayServer' prefix='$prefix'",
-            )
-            val prefixBase = buildPrefix(prefix, displayServer)
-            val prefixWithSpace = prefixBase.withTrailingSpace()
-            when (matched) {
-                "voe" -> {
-                    val vids = voeExtractor.videosFromUrl(url, prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: voeExtractor returned ${vids.size} videos for url=$url")
-                    if (vids.isNotEmpty()) return@runCatching vids
+        val candidates = mutableListOf<JsonElement>()
 
-                    // Fallback: if the dedicated extractor fails (site changed/obfuscated), try the universal extractor
-                    val fallback = universalExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
-                    Log.d(
-                        "HackStoreMX",
-                        "serverVideoResolver: voeExtractor empty, universalExtractor fallback returned ${fallback.size} videos for url=$url",
-                    )
-                    return@runCatching fallback
+        fun scan(el: JsonElement) {
+            when (el) {
+                is JsonObject -> {
+                    el.values.forEach { v -> scan(v) }
                 }
 
-                "okru" -> {
-                    val vids = okruExtractor.videosFromUrl(url, prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: okruExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "filemoon" -> {
-                    val vids = filemoonExtractor.videosFromUrl(url, prefix = prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: filemoonExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "amazon" -> {
-                    val body = client.newCall(GET(url)).execute().asJsoup()
-                    return@runCatching if (body.select("script:containsData(var shareId)").toString().isNotBlank()) {
-                        val shareId =
-                            body
-                                .selectFirst("script:containsData(var shareId)")!!
-                                .data()
-                                .substringAfter("shareId = \"")
-                                .substringBefore("\"")
-                        val amazonApiJson =
-                            client
-                                .newCall(
-                                    GET("https://www.amazon.com/drive/v1/shares/$shareId?resourceVersion=V2&ContentType=JSON&asset=ALL"),
-                                ).execute()
-                                .asJsoup()
-                        val epId = amazonApiJson.toString().substringAfter("\"id\":\"").substringBefore("\"")
-                        val amazonApi =
-                            client
-                                .newCall(
-                                    GET(
-                                        "https://www.amazon.com/drive/v1/nodes/$epId/children?resourceVersion=V2&ContentType=JSON&limit=200&sort=%5B%22kind+DESC%22%2C+%22modifiedDate+DESC%22%5D&asset=ALL&tempLink=true&shareId=$shareId",
-                                    ),
-                                ).execute()
-                                .asJsoup()
-                        val videoUrl =
-                            amazonApi
-                                .toString()
-                                .substringAfter(
-                                    "\"FOLDER\":",
-                                ).substringAfter("tempLink:\"")
-                                .substringBefore("\"")
-                        listOf(Video(videoUrl = videoUrl, videoTitle = buildVideoName(prefixBase, "Amazon")))
+                is JsonArray -> {
+                    val objs = el.mapNotNull { it.jsonObjectOrNull() }
+                    if (objs.isNotEmpty() &&
+                        objs.any { o ->
+                            o["result"] != null ||
+                                o["cyberlocker"] != null ||
+                                o["url"] != null ||
+                                o["link"] != null
+                        }
+                    ) {
+                        candidates.add(el)
                     } else {
-                        emptyList()
+                        el.forEach { scan(it) }
                     }
                 }
 
-                "uqload" -> {
-                    val vids = uqloadExtractor.videosFromUrl(url, prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: uqloadExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "mp4upload" -> {
-                    val vids = mp4uploadExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: mp4uploadExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "streamwish" -> {
-                    val vids = streamWishExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
-                    Log.d("HackStoreMX", "serverVideoResolver: streamWishExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "doodstream" -> {
-                    val vids = doodExtractor.videosFromUrl(url, prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: doodExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "streamlare" -> {
-                    val vids = streamlareExtractor.videosFromUrl(url, prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: streamlareExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "yourupload" -> {
-                    val vids = yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: yourUploadExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "burstcloud" -> {
-                    val vids = burstCloudExtractor.videoFromUrl(url, headers = headers, prefix = prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: burstCloudExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "fastream" -> {
-                    val vids = fastreamExtractor.videosFromUrl(url, prefix = prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: fastreamExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "upstream" -> {
-                    val vids = upstreamExtractor.videosFromUrl(url, prefix = prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: upstreamExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "streamsilk" -> {
-                    val vids = streamSilkExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
-                    Log.d("HackStoreMX", "serverVideoResolver: streamSilkExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "streamtape" -> {
-                    val vids = streamTapeExtractor.videosFromUrl(url, quality = prefixBase)
-                    Log.d("HackStoreMX", "serverVideoResolver: streamTapeExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "vidhide" -> {
-                    val vids = vidHideExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
-                    Log.d("HackStoreMX", "serverVideoResolver: vidHideExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
-                "vidguard" -> {
-                    val vids = vidGuardExtractor.videosFromUrl(url, prefix = prefixWithSpace)
-                    Log.d("HackStoreMX", "serverVideoResolver: vidGuardExtractor returned ${vids.size} videos for url=$url")
-                    return@runCatching vids
-                }
-
                 else -> {
-                    val vids = universalExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
-                    Log.d(
-                        "HackStoreMX",
-                        "serverVideoResolver: universalExtractor returned ${vids.size} videos for url=$url (matched=$matched)",
-                    )
-                    return@runCatching vids
+                    return
                 }
             }
-        }.getOrNull() ?: emptyList()
-    }
-
-    private val conventions =
-        listOf(
-            "voe" to
-                listOf(
-                    "voe",
-                    "voesx",
-                    "tubelessceliolymph",
-                    "simpulumlamerop",
-                    "urochsunloath",
-                    "nathanfromsubject",
-                    "yip.",
-                    "metagnathtuggers",
-                    "donaldlineelse",
-                    "yip.",
-                ),
-            "okru" to listOf("ok.ru", "okru"),
-            "filemoon" to listOf("filemoon", "moonplayer", "moviesm4u", "files.im"),
-            "amazon" to listOf("amazon", "amz"),
-            "uqload" to listOf("uqload"),
-            "mp4upload" to listOf("mp4upload"),
-            "streamwish" to
-                listOf(
-                    "wishembed",
-                    "streamwish",
-                    "strwish",
-                    "wish",
-                    "Kswplayer",
-                    "Swhoi",
-                    "Multimovies",
-                    "Uqloads",
-                    "neko-stream",
-                    "swdyu",
-                    "iplayerhls",
-                    "streamgg",
-                ),
-            "doodstream" to listOf("doodstream", "dood.", "ds2play", "doods.", "ds2play", "ds2video", "dooood", "d000d", "d0000d"),
-            "streamlare" to listOf("streamlare", "slmaxed"),
-            "yourupload" to listOf("yourupload", "upload"),
-            "burstcloud" to listOf("burstcloud", "burst"),
-            "fastream" to listOf("fastream"),
-            "upstream" to listOf("upstream"),
-            "streamsilk" to listOf("streamsilk"),
-            "streamtape" to listOf("streamtape", "stp", "stape", "shavetape"),
-            "vidhide" to
-                listOf(
-                    "ahvsh",
-                    "streamhide",
-                    "guccihide",
-                    "streamvid",
-                    "vidhide",
-                    "kinoger",
-                    "smoothpre",
-                    "dhtpre",
-                    "peytonepre",
-                    "earnvids",
-                    "ryderjet",
-                ),
-            "vidguard" to listOf("vembed", "guard", "listeamed", "bembed", "vgfplay", "bembed"),
-        )
-
-    override fun List<Video>.sortVideos(): List<Video> {
-        val preferredQuality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
-        val preferredServer = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
-        val preferredLang = preferences.getString(PREF_LANGUAGE_KEY, PREF_LANGUAGE_DEFAULT)!!
-        val qualityRegex = Regex("""(\d+)p""")
-
-        fun Video.matchesLanguage() = if (videoTitle.contains(preferredLang)) 1 else 0
-
-        fun Video.matchesServer() = if (videoTitle.contains(preferredServer, ignoreCase = true)) 1 else 0
-
-        fun Video.matchesQuality() = if (videoTitle.contains(preferredQuality)) 1 else 0
-
-        fun Video.displayResolution(): Int =
-            resolution ?: qualityRegex
-                .find(videoTitle)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull() ?: 0
-
-        return sortedWith(
-            compareBy(
-                { it.matchesLanguage() },
-                { it.matchesServer() },
-                { it.matchesQuality() },
-                { it.displayResolution() },
-            ),
-        ).reversed()
-    }
-
-    override fun searchAnimeRequest(
-        page: Int,
-        query: String,
-        filters: AnimeFilterList,
-    ): Request {
-        // Hackstore.mx usa /?s= para búsquedas
-        return if (query.isNotBlank()) {
-            GET("$baseUrl/?s=$query&page=$page", headers)
-        } else {
-            popularAnimeRequest(page)
         }
-    }
 
-    override fun searchAnimeParse(response: Response): AnimesPage {
-        val document = response.asJsoup()
-        val animeList =
-            document.select("article.post").map { element ->
-                SAnime.create().apply {
-                    title = element.selectFirst("h3")?.text() ?: ""
-                    val itemUrl = element.selectFirst("a")?.attr("href") ?: ""
-                    setUrlWithoutDomain(itemUrl)
-                    // Determine fetch type from URL path
-                    val isSeries = itemUrl.contains("/series/") || itemUrl.contains("/serie/")
-                    fetch_type = preferredFetchType(isSeries)
-                    thumbnail_url = element.selectFirst("img")?.attr("src") ?: ""
-                    status = SAnime.UNKNOWN
+        val post = root.obj("data")?.obj("post") ?: root.obj("post") ?: root
+        scan(post)
+
+        val hosterMap = LinkedHashMap<Pair<String, String>, MutableList<Video>>()
+
+        candidates.forEach { cand ->
+            val arr = cand.jsonArray
+            arr.forEach { item ->
+                val obj = item.jsonObjectOrNull() ?: return@forEach
+                val url =
+                    obj.string("result") ?: obj.string("url")
+                        ?: obj.string("link") ?: obj.string("download")
+                        ?: obj.string("embed")
+                val server =
+                    obj.string("cyberlocker") ?: obj.string("server")
+                        ?: obj.string("name") ?: ""
+                val lang = obj.string("lang") ?: obj.string("language") ?: ""
+
+                if (url.isNullOrBlank()) return@forEach
+
+                val videos = serverVideoResolver(url, lang, server)
+                if (videos.isNotEmpty()) {
+                    val key = lang to displayServerName(server.ifBlank { url })
+                    val group = hosterMap.getOrPut(key) { mutableListOf() }
+                    group.addAll(videos)
                 }
             }
-        val hasNextPage = document.selectFirst("a.next") != null
-        return AnimesPage(animeList, hasNextPage)
-    }
+        }
 
-    override fun animeDetailsParse(response: Response): SAnime {
-        val url = response.request.url.toString()
-        val pathSegments = response.request.url.pathSegments
-        val (postType, possibleSlug) =
-            when {
-                pathSegments.contains("peliculas") -> "movies" to pathSegments.getOrNull(pathSegments.indexOf("peliculas") + 1)
-                pathSegments.contains("series") -> "tvshows" to pathSegments.getOrNull(pathSegments.indexOf("series") + 1)
-                else -> null to pathSegments.lastOrNull()
-            }
-
-        val slug = possibleSlug
-
-        // Try to extract siteConfig (contains mappings for genres/countries/langs) from the HTML response
-        val siteConfig = response.extractPageProps()
-
-        val infoReq = GET("$baseUrl/wp-api/v1/single/${postType ?: "tvshows"}?slug=$slug&postType=${postType ?: "tvshows"}", headers)
-        client.newCall(infoReq).execute().use { infoResp ->
-            val infoBody = infoResp.body.string()
-            val infoRoot = runCatching { json.parseToJsonElement(infoBody).jsonObject }.getOrNull()
-            val data = infoRoot?.obj("data") ?: return@use
-            val isMovie = data["type"]?.jsonPrimitive?.contentOrNull?.equals("movies", true) == true
-            // Detect if API data contains seasons: check data.array("seasons") or nested post array
-            val hasSeasons = (data.array("seasons")?.isNotEmpty() == true) || (data.obj("post")?.array("seasons")?.isNotEmpty() == true)
-            val fetchType =
+        return hosterMap.map { (key, videos) ->
+            val (lang, server) = key
+            val displayName =
                 when {
-                    else -> preferredFetchType(!isMovie && hasSeasons)
+                    lang.isNotBlank() && server.isNotBlank() -> "${lang.trim()} $server"
+                    lang.isNotBlank() -> lang
+                    else -> server
                 }
-
-            return SAnime.create().apply {
-                title = (data["title"]?.jsonPrimitive?.contentOrNull ?: slug).toString()
-                val posterPath =
-                    data
-                        .obj("images")
-                        ?.get("poster")
-                        ?.jsonPrimitive
-                        ?.contentOrNull
-                thumbnail_url = posterPath?.let { path -> resolvePosterUrl(path.optimizeImageUrl()) }
-                description = data["overview"]?.jsonPrimitive?.contentOrNull
-                // genres come as ids; leave empty to avoid incorrect mapping
-                // Map genre IDs to names if siteConfig is available
-                val genreNames =
-                    data
-                        .array("genres")
-                        ?.mapNotNull { el -> el.jsonPrimitive.contentOrNull?.toIntOrNull() }
-                        ?.mapNotNull { id ->
-                            siteConfig
-                                ?.obj("datas")
-                                ?.obj("genres")
-                                ?.get(id.toString())
-                                ?.jsonObjectOrNull()
-                                ?.string("name")
-                        } ?: emptyList()
-                genre = genreNames.joinToString(", ")
-
-                author = data["director"]?.jsonPrimitive?.contentOrNull
-                artist =
-                    data
-                        .obj("cast")
-                        ?.array("acting")
-                        ?.firstOrNull()
-                        ?.jsonObjectOrNull()
-                        ?.string("name")
-                status = if (isMovie) SAnime.COMPLETED else SAnime.UNKNOWN
-                // Ensure we set the appropriate fetch type so seasons can be requested
-                fetch_type = fetchType
-                // Normalize stored URL so other requests can derive paths for seasons/episodes
-                setUrlWithoutDomain(if (isMovie) "/peliculas/$slug" else "/series/$slug")
-            }
+            Hoster(hosterName = displayName.ifBlank { "Enlace" }, videoList = videos)
         }
-        return SAnime.create()
-    }
-
-    // Normalize various poster path formats into full URLs used by hackstore
-    private fun resolvePosterUrl(poster: String?): String? {
-        if (poster.isNullOrBlank()) return null
-        return when {
-            poster.contains("/thumbs/") -> "$baseUrl/wp-content/uploads$poster"
-            poster.startsWith("/") -> "$baseUrl$poster"
-            poster.contains("hackstore.mx") -> poster
-            else -> poster
-        }
-    }
-
-    // Nueva función para extraer pageProps desde el string HTML
-    private fun extractPagePropsFromString(html: String): JsonObject? {
-        val regex = Regex("""<script[^>]*>\s*(\{[\s\S]*?\})\s*</script>""", RegexOption.DOT_MATCHES_ALL)
-        val match = regex.find(html)
-        val jsonString = match?.groups?.get(1)?.value ?: return null
-        val root = runCatching { json.parseToJsonElement(jsonString).jsonObject }.getOrNull() ?: return null
-        val propsObj = root["props"] as? JsonObject ?: return null
-        return propsObj["pageProps"] as? JsonObject
     }
 
     private fun JsonArray?.collectHosters(
@@ -1326,98 +1455,291 @@ class Hackstoremx :
         return extractedUrl
     }
 
-    /**
-     * Intenta parsear hosters desde la respuesta JSON de un endpoint de episodio.
-     * Busca arrays u objetos comunes: post.regions, post.links, post.sources, post.player.*
-     */
-    private fun parseHostersFromEpisodeJson(root: JsonObject?): List<Hoster> {
-        if (root == null) return emptyList()
+    // ================================================================================================
+    // HELPER METHODS - VIDEO EXTRACTION BY SERVER
+    // ================================================================================================
 
-        val candidates = mutableListOf<JsonElement>()
+    private val conventions =
+        listOf(
+            "voe" to
+                listOf(
+                    "voe",
+                    "voesx",
+                    "tubelessceliolymph",
+                    "simpulumlamerop",
+                    "urochsunloath",
+                    "nathanfromsubject",
+                    "yip.",
+                    "metagnathtuggers",
+                    "donaldlineelse",
+                    "yip.",
+                ),
+            "okru" to listOf("ok.ru", "okru"),
+            "filemoon" to listOf("filemoon", "moonplayer", "moviesm4u", "files.im"),
+            "amazon" to listOf("amazon", "amz"),
+            "uqload" to listOf("uqload"),
+            "mp4upload" to listOf("mp4upload"),
+            "streamwish" to
+                listOf(
+                    "wishembed",
+                    "streamwish",
+                    "strwish",
+                    "wish",
+                    "Kswplayer",
+                    "Swhoi",
+                    "Multimovies",
+                    "Uqloads",
+                    "neko-stream",
+                    "swdyu",
+                    "iplayerhls",
+                    "streamgg",
+                ),
+            "doodstream" to
+                listOf(
+                    "doodstream",
+                    "dood.",
+                    "ds2play",
+                    "doods.",
+                    "ds2play",
+                    "ds2video",
+                    "dooood",
+                    "d000d",
+                    "d0000d",
+                ),
+            "streamlare" to listOf("streamlare", "slmaxed"),
+            "yourupload" to listOf("yourupload", "upload"),
+            "burstcloud" to listOf("burstcloud", "burst"),
+            "fastream" to listOf("fastream"),
+            "upstream" to listOf("upstream"),
+            "streamsilk" to listOf("streamsilk"),
+            "streamtape" to listOf("streamtape", "stp", "stape", "shavetape"),
+            "vidhide" to
+                listOf(
+                    "ahvsh",
+                    "streamhide",
+                    "guccihide",
+                    "streamvid",
+                    "vidhide",
+                    "kinoger",
+                    "smoothpre",
+                    "dhtpre",
+                    "peytonepre",
+                    "earnvids",
+                    "ryderjet",
+                ),
+            "vidguard" to listOf("vembed", "guard", "listeamed", "bembed", "vgfplay", "bembed"),
+        )
 
-        // Busca recursivamente arrays u objetos que contengan claves esperadas
-        fun scan(el: JsonElement) {
-            when (el) {
-                is JsonObject -> {
-                    el.values.forEach { v -> scan(v) }
-                }
+    private fun extractVideosByServer(
+        matched: String,
+        url: String,
+        prefixBase: String,
+        prefixWithSpace: String,
+    ): List<Video> {
+        return when (matched) {
+            "voe" -> {
+                val vids = voeExtractor.videosFromUrl(url, prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: voeExtractor returned ${vids.size} videos for url=$url")
+                if (vids.isNotEmpty()) return vids
 
-                is JsonArray -> {
-                    // Si el array contiene objetos con 'result'/'cyberlocker'/'url' lo recogemos
-                    val objs = el.mapNotNull { it.jsonObjectOrNull() }
-                    if (objs.isNotEmpty() &&
-                        objs.any { o ->
-                            o.get("result") != null ||
-                                o.get("cyberlocker") != null ||
-                                o.get("url") != null ||
-                                o.get("link") != null
-                        }
-                    ) {
-                        candidates.add(el)
-                    } else {
-                        el.forEach { scan(it) }
-                    }
-                }
-
-                else -> {
-                    return
-                }
+                // Fallback to universal extractor
+                val fallback = universalExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
+                Log.d(
+                    "HackStoreMX",
+                    "serverVideoResolver: voeExtractor empty, universalExtractor fallback returned ${fallback.size} videos for url=$url",
+                )
+                fallback
             }
-        }
 
-        // Revisar nodos habituales
-        val post = root.obj("data")?.obj("post") ?: root.obj("post") ?: root
-        scan(post)
-
-        val hosterMap = LinkedHashMap<Pair<String, String>, MutableList<Video>>()
-
-        candidates.forEach { cand ->
-            val arr = cand.jsonArray
-            arr?.forEach { item ->
-                val obj = item.jsonObjectOrNull() ?: return@forEach
-                val url = obj.string("result") ?: obj.string("url") ?: obj.string("link") ?: obj.string("download") ?: obj.string("embed")
-                val server = obj.string("cyberlocker") ?: obj.string("server") ?: obj.string("name") ?: ""
-                val lang = obj.string("lang") ?: obj.string("language") ?: ""
-
-                if (url.isNullOrBlank()) return@forEach
-
-                val videos = serverVideoResolver(url, lang, server)
-                if (videos.isNotEmpty()) {
-                    val key = lang to displayServerName(server.ifBlank { url })
-                    val group = hosterMap.getOrPut(key) { mutableListOf() }
-                    group.addAll(videos)
-                }
+            "okru" -> {
+                val vids = okruExtractor.videosFromUrl(url, prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: okruExtractor returned ${vids.size} videos for url=$url")
+                vids
             }
-        }
 
-        return hosterMap.map { (key, videos) ->
-            val (lang, server) = key
-            val displayName =
-                when {
-                    lang.isNotBlank() && server.isNotBlank() -> "${lang.trim()} $server"
-                    lang.isNotBlank() -> lang
-                    else -> server
-                }
-            Hoster(hosterName = displayName.ifBlank { "Enlace" }, videoList = videos)
+            "filemoon" -> {
+                val vids = filemoonExtractor.videosFromUrl(url, prefix = prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: filemoonExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "amazon" -> {
+                extractAmazonVideos(url, prefixBase)
+            }
+
+            "uqload" -> {
+                val vids = uqloadExtractor.videosFromUrl(url, prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: uqloadExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "mp4upload" -> {
+                val vids = mp4uploadExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: mp4uploadExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "streamwish" -> {
+                val vids =
+                    streamWishExtractor.videosFromUrl(url, videoNameGen = { quality ->
+                        buildVideoName(prefixBase, quality)
+                    })
+                Log.d("HackStoreMX", "serverVideoResolver: streamWishExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "doodstream" -> {
+                val vids = doodExtractor.videosFromUrl(url, prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: doodExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "streamlare" -> {
+                val vids = streamlareExtractor.videosFromUrl(url, prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: streamlareExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "yourupload" -> {
+                val vids = yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: yourUploadExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "burstcloud" -> {
+                val vids = burstCloudExtractor.videoFromUrl(url, headers = headers, prefix = prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: burstCloudExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "fastream" -> {
+                val vids = fastreamExtractor.videosFromUrl(url, prefix = prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: fastreamExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "upstream" -> {
+                val vids = upstreamExtractor.videosFromUrl(url, prefix = prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: upstreamExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "streamsilk" -> {
+                val vids =
+                    streamSilkExtractor.videosFromUrl(url, videoNameGen = { quality ->
+                        buildVideoName(prefixBase, quality)
+                    })
+                Log.d("HackStoreMX", "serverVideoResolver: streamSilkExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "streamtape" -> {
+                val vids = streamTapeExtractor.videosFromUrl(url, quality = prefixBase)
+                Log.d("HackStoreMX", "serverVideoResolver: streamTapeExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "vidhide" -> {
+                val vids =
+                    vidHideExtractor.videosFromUrl(url, videoNameGen = { quality ->
+                        buildVideoName(prefixBase, quality)
+                    })
+                Log.d("HackStoreMX", "serverVideoResolver: vidHideExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            "vidguard" -> {
+                val vids = vidGuardExtractor.videosFromUrl(url, prefix = prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: vidGuardExtractor returned ${vids.size} videos for url=$url")
+                vids
+            }
+
+            else -> {
+                val vids = universalExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
+                Log.d("HackStoreMX", "serverVideoResolver: universalExtractor returned ${vids.size} videos for url=$url (matched=$matched)")
+                vids
+            }
         }
     }
+
+    private fun extractAmazonVideos(
+        url: String,
+        prefixBase: String,
+    ): List<Video> =
+        runCatching {
+            val body = client.newCall(GET(url)).execute().asJsoup()
+            if (body.select("script:containsData(var shareId)").toString().isNotBlank()) {
+                val shareId =
+                    body
+                        .selectFirst("script:containsData(var shareId)")!!
+                        .data()
+                        .substringAfter("shareId = \"")
+                        .substringBefore("\"")
+
+                val amazonApiJson =
+                    client
+                        .newCall(
+                            GET("https://www.amazon.com/drive/v1/shares/$shareId?resourceVersion=V2&ContentType=JSON&asset=ALL"),
+                        ).execute()
+                        .asJsoup()
+
+                val epId = amazonApiJson.toString().substringAfter("\"id\":\"").substringBefore("\"")
+                val amazonApi =
+                    client
+                        .newCall(
+                            GET(
+                                "https://www.amazon.com/drive/v1/nodes/$epId/children?resourceVersion=V2&ContentType=JSON&limit=200&sort=%5B%22kind+DESC%22%2C+%22modifiedDate+DESC%22%5D&asset=ALL&tempLink=true&shareId=$shareId",
+                            ),
+                        ).execute()
+                        .asJsoup()
+
+                val videoUrl =
+                    amazonApi
+                        .toString()
+                        .substringAfter("\"FOLDER\":")
+                        .substringAfter("tempLink:\"")
+                        .substringBefore("\"")
+
+                listOf(Video(videoUrl = videoUrl, videoTitle = buildVideoName(prefixBase, "Amazon")))
+            } else {
+                emptyList()
+            }
+        }.getOrNull() ?: emptyList()
+
+    // ================================================================================================
+    // HELPER METHODS - SERVER DETECTION
+    // ================================================================================================
+
+    private fun canonicalServerSlug(serverSlug: String): String {
+        val lower = serverSlug.lowercase()
+        return conventions
+            .firstOrNull { (key, names) ->
+                key.equals(lower, true) ||
+                    lower.contains(key, ignoreCase = true) ||
+                    names.any { name ->
+                        name.equals(lower, true) || lower.contains(name, true)
+                    }
+            }?.first ?: lower
+    }
+
+    private fun displayServerName(serverSlug: String): String {
+        val canonical = canonicalServerSlug(serverSlug)
+        if (canonical.isBlank()) return "Unknown"
+
+        return SERVER_DISPLAY_NAMES[canonical] ?: canonical.replaceFirstChar { char ->
+            if (char.isLowerCase()) char.titlecase() else char.toString()
+        }
+    }
+
+    // ================================================================================================
+    // HELPER METHODS - DATA MODELS
+    // ================================================================================================
 
     private data class HosterEntry(
         val languageTag: String,
         val serverSlug: String,
         val videos: List<Video>,
     )
-
-    private data class HosterGroupMeta(
-        val index: Int,
-        val languageTag: String,
-        val serverDisplay: String,
-        val hoster: Hoster,
-    ) {
-        fun matchesLanguage(preferred: String): Int = if (languageTag == preferred) 1 else 0
-
-        fun matchesServer(preferred: String): Int = if (serverDisplay.equals(preferred, ignoreCase = true)) 1 else 0
-    }
 
     private data class GnulaMeta(
         val title: String,
@@ -1451,42 +1773,26 @@ class Hackstoremx :
         val slugEpisode: String,
     )
 
-    private data class GnulaEpisodeBundle(
-        val seasonNumber: Int,
-        val episode: GnulaEpisode,
-    )
-
-    private fun displayServerName(serverSlug: String): String {
-        val canonical = canonicalServerSlug(serverSlug)
-        if (canonical.isBlank()) return "Unknown"
-
-        return SERVER_DISPLAY_NAMES[canonical] ?: canonical.replaceFirstChar { char ->
-            if (char.isLowerCase()) char.titlecase() else char.toString()
-        }
-    }
-
-    private fun canonicalServerSlug(serverSlug: String): String {
-        val lower = serverSlug.lowercase()
-        return conventions
-            .firstOrNull { (key, names) ->
-                key.equals(lower, true) ||
-                    lower.contains(key, ignoreCase = true) ||
-                    names.any { name ->
-                        name.equals(lower, true) || lower.contains(name, true)
-                    }
-            }?.first ?: lower
-    }
+    // ================================================================================================
+    // HELPER METHODS - JSON CONVERSIONS
+    // ================================================================================================
 
     private fun Response.extractPageProps(): JsonObject? {
         val document = asJsoup()
-        // Buscar script embebido con pageProps
+
+        // Search for embedded script with pageProps
         val jsonString = document.selectFirst("script:containsData({\"props\":{\"pageProps\":)")?.data()
         if (jsonString != null) {
             val root = runCatching { json.parseToJsonElement(jsonString).jsonObject }.getOrNull() ?: return null
             return root.obj("props")?.obj("pageProps")
         }
-        // Fallback: buscar window.siteConfig
-        val siteConfigScript = document.select("script").firstOrNull { it.data().contains("window.siteConfig") }?.data()
+
+        // Fallback: search for window.siteConfig
+        val siteConfigScript =
+            document
+                .select("script")
+                .firstOrNull { it.data().contains("window.siteConfig") }
+                ?.data()
         if (siteConfigScript != null) {
             val jsonStart = siteConfigScript.indexOf("window.siteConfig = ")
             if (jsonStart != -1) {
@@ -1494,6 +1800,7 @@ class Hackstoremx :
                 return runCatching { json.parseToJsonElement(jsonRaw).jsonObject }.getOrNull()
             }
         }
+
         return null
     }
 
@@ -1502,57 +1809,44 @@ class Hackstoremx :
         val title = post.obj("titles")?.string("name") ?: return null
         val overview = post.string("overview")
         val poster = post.obj("images")?.string("poster")?.optimizeImageUrl()
+
         val genres =
-            post
-                .array("genres")
-                ?.mapNotNull { element ->
-                    element
-                        .jsonObjectOrNull()
-                        ?.string("name")
-                        ?.takeIf { it.isNotBlank() }
-                }
-                ?: emptyList()
+            post.array("genres")?.mapNotNull { element ->
+                element.jsonObjectOrNull()?.string("name")?.takeIf { it.isNotBlank() }
+            } ?: emptyList()
+
         val director = post.string("director")
         val cast =
-            post
-                .obj("cast")
-                ?.array("acting")
-                ?.mapNotNull { element ->
-                    element
-                        .jsonObjectOrNull()
-                        ?.string("name")
-                        ?.takeIf { it.isNotBlank() }
-                }
-                ?: emptyList()
+            post.obj("cast")?.array("acting")?.mapNotNull { element ->
+                element.jsonObjectOrNull()?.string("name")?.takeIf { it.isNotBlank() }
+            } ?: emptyList()
+
         val seasons =
-            post
-                .array("seasons")
-                ?.mapNotNull { element ->
-                    when (element) {
-                        is JsonObject -> {
-                            element.toGnulaSeason(overview)
-                        }
+            post.array("seasons")?.mapNotNull { element ->
+                when (element) {
+                    is JsonObject -> {
+                        element.toGnulaSeason(overview)
+                    }
 
-                        is JsonPrimitive -> {
-                            // seasons can be primitives like "2"; create a minimal GnulaSeason
-                            val txt = element.jsonPrimitive.contentOrNull ?: return@mapNotNull null
-                            val num = txt.toIntOrNull() ?: return@mapNotNull null
-                            GnulaSeason(
-                                number = num,
-                                title = null,
-                                overview = overview,
-                                slugName = null,
-                                slugSeason = num.toString(),
-                                episodes = emptyList(),
-                            )
-                        }
+                    is JsonPrimitive -> {
+                        val txt = element.jsonPrimitive.contentOrNull ?: return@mapNotNull null
+                        val num = txt.toIntOrNull() ?: return@mapNotNull null
+                        GnulaSeason(
+                            number = num,
+                            title = null,
+                            overview = overview,
+                            slugName = null,
+                            slugSeason = num.toString(),
+                            episodes = emptyList(),
+                        )
+                    }
 
-                        else -> {
-                            null
-                        }
+                    else -> {
+                        null
                     }
                 }
-                ?: emptyList()
+            } ?: emptyList()
+
         val isMovie = post.string("type")?.equals("movie", true) == true || seasons.isEmpty()
 
         return GnulaMeta(
@@ -1574,12 +1868,11 @@ class Hackstoremx :
         val slug = obj("slug")
         val slugName = slug?.string("name")
         val slugSeason = slug?.string("season")
+
         val episodes =
-            array("episodes")
-                ?.mapIndexedNotNull { index, element ->
-                    element.jsonObjectOrNull()?.toGnulaEpisode(number, index + 1)
-                }
-                ?: emptyList()
+            array("episodes")?.mapIndexedNotNull { index, element ->
+                element.jsonObjectOrNull()?.toGnulaEpisode(number, index + 1)
+            } ?: emptyList()
 
         return GnulaSeason(
             number = number,
@@ -1599,10 +1892,12 @@ class Hackstoremx :
         val slugName = slug.string("name") ?: return null
         val slugSeason = slug.string("season") ?: seasonNumber.toString()
         val slugEpisode = slug.string("episode") ?: return null
+
         val episodeNumber =
             long("number")?.toInt()
                 ?: slugEpisode.filter(Char::isDigit).toIntOrNull()
                 ?: fallbackNumber
+
         val title = string("title")
         val overview = string("overview") ?: string("description")
         val image = string("image")?.optimizeImageUrl()
@@ -1627,18 +1922,17 @@ class Hackstoremx :
         sourceBaseUrl: String,
     ): SAnime {
         val normalizedNumber =
-            slugSeason
-                ?.filter(Char::isDigit)
-                ?.toIntOrNull()
-                ?.takeIf { it > 0 }
+            slugSeason?.filter(Char::isDigit)?.toIntOrNull()?.takeIf { it > 0 }
                 ?: number.takeIf { it > 0 }
                 ?: 1
+
         val resolvedTitle =
             title?.takeIf { it.isNotBlank() }
                 ?: when {
                     meta.title.isNotBlank() -> "${meta.title} - Temporada $normalizedNumber"
                     else -> "Temporada $normalizedNumber"
                 }
+
         val seasonDescription = overview ?: meta.overview
 
         return SAnime.create().apply {
@@ -1647,6 +1941,7 @@ class Hackstoremx :
             thumbnail_url = resolvePosterUrl(meta.poster)
             fetch_type = FetchType.Episodes
             season_number = normalizedNumber.toDouble()
+
             meta.genres
                 .takeIf { it.isNotEmpty() }
                 ?.joinToString(", ")
@@ -1662,55 +1957,23 @@ class Hackstoremx :
         }
     }
 
-    private fun GnulaMeta.toEpisodeList(
-        baseUrl: String,
-        selectedSeason: Int?,
-    ): List<SEpisode> {
-        val seasonsToUse = seasons.filter { selectedSeason == null || it.number == selectedSeason }
-        if (seasonsToUse.isEmpty()) return emptyList()
+    // ================================================================================================
+    // HELPER METHODS - URL & IMAGE RESOLUTION
+    // ================================================================================================
 
-        val singleSeason = seasonsToUse.size == 1
-
-        return seasonsToUse
-            .flatMap { season ->
-                season.episodes.map { episode ->
-                    GnulaEpisodeBundle(season.number, episode)
-                }
-            }.sortedWith(compareBy({ it.seasonNumber }, { it.episode.number }))
-            .reversed()
-            .mapNotNull { bundle ->
-                runCatching {
-                    val episode = bundle.episode
-                    val episodeNumberValue =
-                        if (singleSeason) {
-                            episode.number.toFloat()
-                        } else {
-                            buildCombinedEpisodeNumber(bundle.seasonNumber, episode.number)
-                        }
-
-                    // defensive fallbacks for slugs
-                    val slugName = episode.slugName.ifBlank { bundle.episode.slugName }
-                    val slugSeason = episode.slugSeason.ifBlank { bundle.seasonNumber.toString() }
-                    val slugEpisode = episode.slugEpisode.ifBlank { episode.number.toString() }
-
-                    SEpisode.create().apply {
-                        episode_number = episodeNumberValue
-                        name = buildEpisodeName(bundle.seasonNumber, episode.number, episode.title)
-                        summary = episode.overview
-                        preview_url = resolveEpisodeImage(episode.image)
-                        date_upload = episode.releaseDate?.toDate() ?: 0L
-                        setUrlWithoutDomain(
-                            "$baseUrl/series/$slugName/seasons/$slugSeason/episodes/$slugEpisode",
-                        )
-                    }
-                }.getOrNull()
-            }
+    private fun resolvePosterUrl(poster: String?): String? {
+        if (poster.isNullOrBlank()) return null
+        return when {
+            poster.contains("/thumbs/") -> "$baseUrl/wp-content/uploads$poster"
+            poster.startsWith("/") -> "$baseUrl$poster"
+            poster.contains("hackstore.mx") -> poster
+            else -> poster
+        }
     }
 
-    // Normalize episode image paths (handles /path, full urls or relative paths stored in API)
     private fun resolveEpisodeImage(path: String?): String? {
         if (path.isNullOrBlank()) return null
-        // Detect TMDB pattern (e.g. "/7aowzFb9Qps7XBn86g5ZNQza1el.jpg") and use TMDB CDN
+
         val tmdbRegex = Regex("^/?[A-Za-z0-9_-]{6,}.*\\.(jpg|jpeg|png|webp)", RegexOption.IGNORE_CASE)
         return when {
             path.startsWith("http", true) -> {
@@ -1740,6 +2003,35 @@ class Hackstoremx :
         }
     }
 
+    private fun String.toAbsoluteUrl(): String =
+        if (startsWith("http", true)) {
+            this
+        } else {
+            val separator = if (startsWith("/")) "" else "/"
+            "$baseUrl$separator$this"
+        }
+
+    private fun buildSeasonUrl(
+        sourceBaseUrl: String,
+        baseUrlPath: String,
+        seasonNumber: Int,
+    ): String {
+        val normalizedPath =
+            when {
+                baseUrlPath.startsWith("http", true) -> baseUrlPath.removePrefix(sourceBaseUrl)
+                baseUrlPath.startsWith("/") -> baseUrlPath
+                baseUrlPath.isBlank() -> "/"
+                else -> "/${baseUrlPath.trimStart('/')}"
+            }
+        val hasQuery = normalizedPath.contains('?')
+        val separator = if (hasQuery) '&' else '?'
+        return "$normalizedPath${separator}season=$seasonNumber"
+    }
+
+    // ================================================================================================
+    // HELPER METHODS - STRING UTILITIES
+    // ================================================================================================
+
     private fun buildEpisodeName(
         season: Int,
         episode: Int,
@@ -1758,98 +2050,6 @@ class Hackstoremx :
             append(")")
         }
     }
-
-    private fun buildCombinedEpisodeNumber(
-        season: Int,
-        episode: Int,
-    ): Float = (season * 1000 + episode).toFloat()
-
-    private fun buildSeasonUrl(
-        sourceBaseUrl: String,
-        baseUrlPath: String,
-        seasonNumber: Int,
-    ): String {
-        val normalizedPath =
-            when {
-                baseUrlPath.startsWith("http", true) -> baseUrlPath.removePrefix(sourceBaseUrl)
-                baseUrlPath.startsWith("/") -> baseUrlPath
-                baseUrlPath.isBlank() -> "/"
-                else -> "/${baseUrlPath.trimStart('/') }"
-            }
-        val hasQuery = normalizedPath.contains('?')
-        val separator = if (hasQuery) '&' else '?'
-        return "$normalizedPath${separator}season=$seasonNumber"
-    }
-
-    override fun getFilterList(): AnimeFilterList =
-        AnimeFilterList(
-            AnimeFilter.Header("La busqueda por texto ignora el filtro"),
-            GenreFilter(),
-        )
-
-    private class GenreFilter :
-        UriPartFilter(
-            "Géneros",
-            arrayOf(
-                Pair("<selecionar>", ""),
-                Pair("Películas", "archives/movies/releases"),
-                Pair("Series", "archives/series/releases"),
-                Pair("Acción", "genres/accion"),
-                Pair("Animación", "genres/animacion"),
-                Pair("Crimen", "genres/crimen"),
-                Pair("Fámilia", "genres/familia"),
-                Pair("Misterio", "genres/misterio"),
-                Pair("Suspenso", "genres/suspenso"),
-                Pair("Aventura", "genres/aventura"),
-                Pair("Ciencia Ficción", "genres/ciencia-ficcion"),
-                Pair("Drama", "genres/drama"),
-                Pair("Fantasía", "genres/fantasia"),
-                Pair("Romance", "genres/romance"),
-                Pair("Terror", "genres/terror"),
-            ),
-        )
-
-    private open class UriPartFilter(
-        displayName: String,
-        val vals: Array<Pair<String, String>>,
-    ) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
-        fun toUriPart() = vals[state].second
-    }
-
-    private fun String.toAbsoluteUrl(): String =
-        if (startsWith("http", true)) {
-            this
-        } else {
-            val separator = if (startsWith("/")) "" else "/"
-            "$baseUrl$separator$this"
-        }
-
-    private fun String.toDate(): Long = runCatching { DATE_FORMATTER.parse(trim())?.time }.getOrNull() ?: 0L
-
-    private fun urlSolverByType(
-        type: String,
-        slug: String,
-    ): String =
-        when (type) {
-            "PaginatedMovie", "PaginatedGenre" -> "$baseUrl/movies/$slug"
-            "PaginatedSerie" -> "$baseUrl/series/$slug"
-            else -> ""
-        }
-
-    private fun JsonObject.string(key: String): String? = get(key).stringValue()
-
-    private fun JsonObject.long(key: String): Long? = get(key).stringValue()?.toLongOrNull()
-
-    private fun JsonObject.array(key: String): JsonArray? = get(key) as? JsonArray
-
-    private fun JsonObject.obj(key: String): JsonObject? = get(key) as? JsonObject
-
-    private fun String.optimizeImageUrl(): String =
-        if (contains("/original/", ignoreCase = true)) {
-            replace("/original/", "/w400/")
-        } else {
-            this
-        }
 
     private fun buildPrefix(
         languageTag: String,
@@ -1872,82 +2072,42 @@ class Hackstoremx :
             else -> "$prefix ${detail.trim()}"
         }
 
+    private fun String.optimizeImageUrl(): String =
+        if (contains("/original/", ignoreCase = true)) {
+            replace("/original/", "/w400/")
+        } else {
+            this
+        }
+
+    // ================================================================================================
+    // HELPER METHODS - JSON EXTENSIONS
+    // ================================================================================================
+
+    private fun JsonObject.string(key: String): String? = get(key).stringValue()
+
+    private fun JsonObject.long(key: String): Long? = get(key).stringValue()?.toLongOrNull()
+
+    private fun JsonObject.array(key: String): JsonArray? = get(key) as? JsonArray
+
+    private fun JsonObject.obj(key: String): JsonObject? = get(key) as? JsonObject
+
     private fun JsonElement?.jsonObjectOrNull(): JsonObject? = this as? JsonObject
 
     private fun JsonElement?.stringValue(): String? = (this as? JsonPrimitive)?.contentOrNull
+
+    // ================================================================================================
+    // HELPER METHODS - PREFERENCES
+    // ================================================================================================
 
     private fun prefersSeasonFetch(): Boolean = preferences.splitSeasons
 
     private fun preferredFetchType(isSeries: Boolean): FetchType =
         if (isSeries && prefersSeasonFetch()) FetchType.Seasons else FetchType.Episodes
-
-    override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        ListPreference(screen.context)
-            .apply {
-                key = PREF_LANGUAGE_KEY
-                title = "Preferred language"
-                entries = LANGUAGE_LIST
-                entryValues = LANGUAGE_LIST
-                setDefaultValue(PREF_LANGUAGE_DEFAULT)
-                summary = "%s"
-
-                setOnPreferenceChangeListener { _, newValue ->
-                    val selected = newValue as String
-                    val index = findIndexOfValue(selected)
-                    val entry = entryValues[index] as String
-                    preferences.edit().putString(key, entry).commit()
-                }
-            }.also(screen::addPreference)
-
-        ListPreference(screen.context)
-            .apply {
-                key = PREF_QUALITY_KEY
-                title = "Preferred quality"
-                entries = QUALITY_LIST
-                entryValues = QUALITY_LIST
-                setDefaultValue(PREF_QUALITY_DEFAULT)
-                summary = "%s"
-
-                setOnPreferenceChangeListener { _, newValue ->
-                    val selected = newValue as String
-                    val index = findIndexOfValue(selected)
-                    val entry = entryValues[index] as String
-                    preferences.edit().putString(key, entry).commit()
-                }
-            }.also(screen::addPreference)
-
-        ListPreference(screen.context)
-            .apply {
-                key = PREF_SERVER_KEY
-                title = "Preferred server"
-                entries = SERVER_LIST
-                entryValues = SERVER_LIST
-                setDefaultValue(PREF_SERVER_DEFAULT)
-                summary = "%s"
-
-                setOnPreferenceChangeListener { _, newValue ->
-                    val selected = newValue as String
-                    val index = findIndexOfValue(selected)
-                    val entry = entryValues[index] as String
-                    preferences.edit().putString(key, entry).commit()
-                }
-            }.also(screen::addPreference)
-
-        SwitchPreferenceCompat(screen.context)
-            .apply {
-                key = PREF_SPLIT_SEASONS_KEY
-                title = "Split seasons"
-                summary = "Mostrar temporadas como entradas separadas"
-                setDefaultValue(PREF_SPLIT_SEASONS_DEFAULT)
-                isChecked = preferences.splitSeasons
-
-                setOnPreferenceChangeListener { _, newValue ->
-                    preferences.splitSeasons = newValue as Boolean
-                    true
-                }
-            }.also(screen::addPreference)
-    }
 }
+
+// ================================================================================================
+// PREFERENCE EXTENSIONS
+// ================================================================================================
 
 private var SharedPreferences.splitSeasons: Boolean
     get() {
