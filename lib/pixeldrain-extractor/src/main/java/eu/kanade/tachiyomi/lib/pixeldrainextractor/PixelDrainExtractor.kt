@@ -11,7 +11,7 @@ class PixelDrainExtractor(private val client: OkHttpClient) {
                 subtitleTracks = emptyList(), audioTracks = emptyList()
             ))
         } else {
-            listOf(Video(videoTitle = "${prefix}PixelDrain", videoUrl = "https://pixeldrain.com/api/file/${mId}?download",
+            listOf(Video(videoTitle = "${prefix}PixelDrain", videoUrl = "https://pixeldrain.net/api/file/${mId}?download",
                 subtitleTracks = emptyList(), audioTracks = emptyList()
             ))
         }
