@@ -6,6 +6,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -113,7 +114,16 @@ class EnNovelas :
 
     private fun getNumberFromEpsString(epsStr: String): String = epsStr.filter { it.isDigit() }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         val form = document.selectFirst("#btnServers form")
         val urlRequest = form?.attr("action") ?: ""
@@ -161,19 +171,13 @@ class EnNovelas :
             }
     }
 
-    override fun videoListSelector() = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
-
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
-
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString("preferred_quality", "Voex")
         if (quality != null) {
             val newList = mutableListOf<Video>()
             var preferred = 0
             for (video in this) {
-                if (video.quality == quality) {
+                if (video.videoTitle == quality) {
                     newList.add(preferred, video)
                     preferred++
                 } else {
@@ -315,62 +319,6 @@ class EnNovelas :
         )
 
     private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
-        fun toUriPart() = vals[state].second
-    }
-
-    override fun getFilterList(): AnimeFilterList = AnimeFilterList(
-        AnimeFilter.Header("La búsqueda por texto ignora el filtro"),
-        GenreFilter(),
-        YearFilter(),
-        TypeFilter(),
-    )
-
-    private class GenreFilter : UriPartFilter(
-        "Categorías",
-        arrayOf(
-            Pair("Seleccionar", ""),
-            Pair("Novelas Mexicanas", "genre/novelas-mexicanas"),
-            Pair("Novelas Colombianas", "genre/novelas-colombianas"),
-            Pair("Series Y Novelas Turcas", "genre/series-y-novelas-turcas"),
-            Pair("Novelas Brasileñas", "genre/novelas-brasilenas"),
-            Pair("Novelas Americanas", "genre/novelas-americanas"),
-            Pair("Novelas Españolas", "genre/novelas-espanolas"),
-            Pair("Novelas Chilenas", "genre/telenovelas-chilenas"),
-            Pair("Novelas Peruanas", "genre/novelas-peruanas"),
-            Pair("Novelas Venezolanas", "genre/novelas-venezolanas"),
-            Pair("Novelas Reino Unido", "genre/novelas-reino-unido"),
-            Pair("Novelas Argentinas", "genre/novelas-argentinas"),
-            Pair("Novelas Filipinas", "genre/novelas-filipinas"),
-            Pair("Novelas Indias", "genre/novelas-indias"),
-        ),
-    )
-
-    private class YearFilter : UriPartFilter(
-        "Años",
-        arrayOf(
-            Pair("Seleccionar", ""),
-            Pair("2024", "years/2024"),
-            Pair("2023", "years/2023"),
-            Pair("2022", "years/2022"),
-            Pair("2021", "years/2021"),
-            Pair("2020", "years/2020"),
-            Pair("2019", "years/2019"),
-            Pair("2018", "years/2018"),
-            Pair("2017", "years/2017"),
-            Pair("2016", "years/2016"),
-            Pair("2015", "years/2015"),
-        ),
-    )
-    private class TypeFilter : UriPartFilter(
-        "Tipo",
-        arrayOf(
-            Pair("Seleccionar", ""),
-            Pair("Peliculas", "movies"),
-        ),
-    )
-
-    private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) :
-        AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
         fun toUriPart() = vals[state].second
     }
 

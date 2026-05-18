@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.animeextension.all.animeonsen.dto.VideoData
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
@@ -21,13 +22,9 @@ import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import okhttp3.Headers
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import uy.kohesive.injekt.injectLazy
 
@@ -119,7 +116,19 @@ class AnimeOnsen :
     }
 
     // ============================ Video Links =============================
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
+    override fun hosterListRequest(episode: SEpisode): Request = GET("$apiUrl/content/${episode.url}")
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val tempHoster = Hoster(name)
+        val videos = videoListParse(response, tempHoster)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    override fun videoListRequest(hoster: Hoster): Request = throw UnsupportedOperationException("Not used")
+
+    override fun videoListParse(response: Response, hoster: Hoster): List<Video> {
         val videoData = response.parseAs<VideoData>()
         val videoUrl = videoData.uri.stream
         val subtitleLangs = videoData.metadata.subtitles
@@ -130,11 +139,14 @@ class AnimeOnsen :
             Track(subUrl, language)
         }
 
-        val video = Video(videoUrl, "Default (720p)", videoUrl, headers, subtitleTracks = subs)
+        val video = Video(
+            videoUrl = videoUrl,
+            videoTitle = "Default (720p)",
+            headers = headers,
+            subtitleTracks = subs,
+        )
         return listOf(video)
     }
-
-    override fun videoListRequest(episode: SEpisode) = GET("$apiUrl/content/${episode.url}")
 
     override fun videoUrlParse(response: Response) = throw UnsupportedOperationException()
 

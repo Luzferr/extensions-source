@@ -34,7 +34,7 @@ class BurstCloudExtractor(private val client: OkHttpClient) {
 
             if (videoUrl.isNotEmpty()) {
                 val quality = prefix + name
-                listOf(Video(url = videoUrl, quality = quality, videoUrl = videoUrl, headers = newHeaders, subtitleTracks = emptyList(), audioTracks = emptyList()))
+                listOf(Video(videoUrl = videoUrl, videoTitle = quality, headers = newHeaders, subtitleTracks = emptyList(), audioTracks = emptyList()))
             } else {
                 null
             }

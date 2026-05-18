@@ -8,9 +8,6 @@ import aniyomi.lib.mp4uploadextractor.Mp4uploadExtractor
 import aniyomi.lib.streamwishextractor.StreamWishExtractor
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.multisrc.animestream.AnimeStream
-import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.utils.parallelCatchingFlatMapBlocking
-import okhttp3.Response
 
 class LMAnime :
     AnimeStream(
@@ -22,25 +19,14 @@ class LMAnime :
     override val prefQualityValues = arrayOf("144p", "288p", "480p", "720p", "1080p")
     override val prefQualityEntries = prefQualityValues
 
-    override fun videoListParse(response: Response): List<Video> {
-        val items = response.asJsoup().select(videoListSelector())
-        val allowed = preferences.getStringSet(PREF_ALLOWED_LANGS_KEY, PREF_ALLOWED_LANGS_DEFAULT)!!
-        return items
-            .filter { element ->
-                val text = element.text()
-                allowed.any { it in text }
-            }.parallelCatchingFlatMapBlocking {
-                val language = it.text().substringBefore(" ")
-                val url = getHosterUrl(it)
-                getVideoList(url, language)
-            }
-    }
-
     private val streamwishExtractor by lazy { StreamWishExtractor(client, headers) }
     private val dailyExtractor by lazy { DailymotionExtractor(client, headers) }
     private val mp4uploadExtractor by lazy { Mp4uploadExtractor(client) }
 
     override fun getVideoList(url: String, name: String): List<Video> {
+        val allowed = preferences.getStringSet(PREF_ALLOWED_LANGS_KEY, PREF_ALLOWED_LANGS_DEFAULT)!!
+        if (allowed.none { it in name }) return emptyList()
+
         val prefix = "($name) - "
         return when {
             "dailymotion" in url -> dailyExtractor.videosFromUrl(url, "Dailymotion ($name)")
@@ -84,13 +70,13 @@ class LMAnime :
     }
 
     // ============================= Utilities ==============================
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(prefQualityKey, prefQualityDefault)!!
         val lang = preferences.getString(PREF_LANG_KEY, PREF_LANG_DEFAULT)!!
         return sortedWith(
             compareBy(
-                { it.quality.contains(quality) },
-                { it.quality.contains(lang, true) },
+                { it.videoTitle.contains(quality, true) },
+                { it.videoTitle.contains(lang, true) },
             ),
         ).reversed()
     }

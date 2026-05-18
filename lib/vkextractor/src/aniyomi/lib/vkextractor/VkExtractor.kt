@@ -9,7 +9,7 @@ import okhttp3.OkHttpClient
 import java.security.MessageDigest
 
 class VkExtractor(private val client: OkHttpClient, private val headers: Headers) {
-    //Credit: https://github.com/skoruppa/docchi-stremio-addon/blob/main/app/players/vk.py
+    // Credit: https://github.com/skoruppa/docchi-stremio-addon/blob/main/app/players/vk.py
     private val documentHeaders = headers.newBuilder()
         .add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
         .add("Accept-Language", "en-US,en;q=0.9")
@@ -25,11 +25,15 @@ class VkExtractor(private val client: OkHttpClient, private val headers: Headers
         val videoId = extractVideoId(url) ?: return emptyList()
 
         val apiVideos = getVideosViaApi(videoId)
-        if (apiVideos.isNotEmpty()) return apiVideos.map {
-            Video(it.url, "${prefix}${it.quality}", it.url, videoHeaders)
+        if (apiVideos.isNotEmpty()) {
+            return apiVideos.map {
+                Video(videoUrl = it.url, videoTitle = "${prefix}${it.quality}", headers = videoHeaders)
+            }
         }
 
-        val embedUrl = if (url.contains("video_ext.php")) url else {
+        val embedUrl = if (url.contains("video_ext.php")) {
+            url
+        } else {
             val parts = videoId.split("_")
             if (parts.size == 2) "$VK_URL/video_ext.php?oid=${parts[0]}&id=${parts[1]}&autoplay=0" else url
         }
@@ -80,23 +84,15 @@ class VkExtractor(private val client: OkHttpClient, private val headers: Headers
         }
     }
 
-    fun videosFromUrl(url: String, prefix: String) = videosFromUrl(url) { "${prefix}Vk - $it" }
-
-    fun videosFromUrl(url: String, videoNameGen: (String) -> String = { quality -> "Vk - $quality" }): List<Video> {
-        val data = client.newCall(GET(url, documentHeaders)).execute().body.string()
-
-        return REGEX_VIDEO.findAll(data).map {
-            val quality = it.groupValues[1]
-            val videoUrl = it.groupValues[2].replace("\\/", "/")
-            Video(videoUrl, videoNameGen("${quality}p"), videoUrl, videoHeaders)
-        }.toList()
+    private fun extractVideosFromHtml(htmlContent: String, prefix: String): List<Video> = parseVideoUrls(htmlContent).map {
+        Video(videoUrl = it.url, videoTitle = "${prefix}${it.quality}", headers = videoHeaders)
     }
 
     private fun parseVideoUrls(text: String): List<RawVideo> {
         val videos = mutableListOf<RawVideo>()
         val patterns = listOf(
             """"url(\d+)":"(.*?)"""".toRegex(),
-            """"mp4_(\d+)":"(.*?)"""".toRegex()
+            """"mp4_(\d+)":"(.*?)"""".toRegex(),
         )
 
         patterns.forEach { regex ->
@@ -122,7 +118,7 @@ class VkExtractor(private val client: OkHttpClient, private val headers: Headers
         val patterns = listOf(
             "oid=(-?\\d+).*?id=(\\d+)".toRegex(),
             "video(-?\\d+_\\d+)".toRegex(),
-            "clip(-?\\d+_\\d+)".toRegex()
+            "clip(-?\\d+_\\d+)".toRegex(),
         )
 
         for (regex in patterns) {

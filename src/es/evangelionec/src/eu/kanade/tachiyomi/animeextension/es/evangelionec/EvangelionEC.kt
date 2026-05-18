@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
 import aniyomi.lib.doodextractor.DoodExtractor
 import aniyomi.lib.filemoonextractor.FilemoonExtractor
 import aniyomi.lib.megaupextractor.MegaUpExtractor
@@ -23,6 +24,8 @@ import eu.kanade.tachiyomi.animeextension.es.evangelionec.EvangelionECConstants.
 import eu.kanade.tachiyomi.animeextension.es.evangelionec.EvangelionECConstants.PREF_QUALITY_KEY
 import eu.kanade.tachiyomi.animeextension.es.evangelionec.EvangelionECConstants.PREF_SERVER_DEFAULT
 import eu.kanade.tachiyomi.animeextension.es.evangelionec.EvangelionECConstants.PREF_SERVER_KEY
+import eu.kanade.tachiyomi.animeextension.es.evangelionec.EvangelionECConstants.PREF_SPLIT_SEASONS_DEFAULT
+import eu.kanade.tachiyomi.animeextension.es.evangelionec.EvangelionECConstants.PREF_SPLIT_SEASONS_KEY
 import eu.kanade.tachiyomi.animeextension.es.evangelionec.EvangelionECConstants.QUALITY_LIST
 import eu.kanade.tachiyomi.animeextension.es.evangelionec.EvangelionECConstants.RESOLUTION_REGEX
 import eu.kanade.tachiyomi.animeextension.es.evangelionec.EvangelionECConstants.SERVER_LIST
@@ -34,6 +37,8 @@ import eu.kanade.tachiyomi.animeextension.es.evangelionec.EvangelionECFilters.Ty
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.FetchType
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -41,6 +46,7 @@ import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.lib.meganzextractor.MegaNzExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -199,6 +205,13 @@ class EvangelionEC :
             thumbnail_url = document.selectFirst("section#info img[itemprop=image]")?.attr("src")
                 ?: document.selectFirst(".separator img")?.attr("src")
 
+            // Detect if it has seasons (skip if already a season entry)
+            val isSeason =
+                response.request.url.fragment
+                    ?.startsWith("season") == true
+            val hasSeasons = !isSeason && document.select(".v7_season-card a[href]").isNotEmpty()
+            fetch_type = preferredFetchType(hasSeasons)
+
             description = document.selectFirst("#synopsis")?.text()
 
             genre =
@@ -287,7 +300,7 @@ class EvangelionEC :
 
     // ============================== Hoster List ===============================
 
-    override fun videoListRequest(episode: SEpisode): Request {
+    override fun hosterListRequest(episode: SEpisode): Request {
         currentEpNumber = episode.url.substringAfter("#ep=", "")
         val cleanUrl =
             episode.url
@@ -297,7 +310,7 @@ class EvangelionEC :
         return GET(cleanUrl, headers)
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
         val epNumber = currentEpNumber
 
@@ -318,26 +331,23 @@ class EvangelionEC :
             }
         }
 
-        val videoList = mutableListOf<Video>()
+        val hosterMap = mutableMapOf<String, MutableList<Video>>()
 
         embedUrls.distinct().forEach { url ->
             val serverName = guessServerName(url)
-            val videos = runCatching {
-                kotlinx.coroutines.runBlocking {
-                    extractVideosFromUrl(url, serverName)
-                }
-            }.getOrNull().orEmpty()
+            val videos = runCatching { extractVideosFromUrl(url, serverName) }.getOrNull().orEmpty()
             if (videos.isNotEmpty()) {
-                videoList.addAll(videos)
+                hosterMap.getOrPut(serverName) { mutableListOf() }.addAll(videos)
             }
         }
 
-        return videoList.sortVideos()
+        return hosterMap.map { (name, videos) ->
+            Hoster(hosterName = name, videoList = videos.sortVideos())
+        }
     }
 
     // ============================== Season List ===============================
 
-    /*
     override suspend fun getSeasonList(anime: SAnime): List<SAnime> {
         if (anime.fetch_type != FetchType.Seasons) return emptyList()
         val request = GET(anime.url.toAbsoluteUrl().forceDesktop(), headers)
@@ -419,7 +429,6 @@ class EvangelionEC :
             }
         }
     }
-     */
 
     // ============================== Video Extraction ===============================
 
@@ -431,7 +440,7 @@ class EvangelionEC :
             }?.name ?: "Unknown"
     }
 
-    private suspend fun extractVideosFromUrl(
+    private fun extractVideosFromUrl(
         url: String,
         serverName: String,
     ): List<Video> {
@@ -444,10 +453,10 @@ class EvangelionEC :
             "Okru" -> okruExtractor.videosFromUrl(url, prefix)
             "Doodstream" -> doodExtractor.videosFromUrl(url, prefix)
             "Mp4Upload" -> mp4uploadExtractor.videosFromUrl(url, headers, prefix = prefix)
-            "Uqload" -> uqloadExtractor.videosFromUrl(url, prefix)
+            "Uqload" -> runBlocking { uqloadExtractor.videosFromUrl(url, prefix) }
             "YourUpload" -> yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = prefix)
-            "VidHide" -> vidHideExtractor.videosFromUrl(url, videoNameGen = { "$serverName $it" })
-            "MegaUp" -> megaUpExtractor.videosFromUrl(url, serverName = prefix)
+            "VidHide" -> runBlocking { vidHideExtractor.videosFromUrl(url, videoNameGen = { "$serverName $it" }) }
+            "MegaUp" -> runBlocking { megaUpExtractor.videosFromUrl(url, serverName = prefix) }
             "MEGA" -> megaNzExtractor.videosFromUrl(url, prefix = prefix)
             else -> universalExtractor.videosFromUrl(url, headers, prefix)
         }
@@ -542,7 +551,7 @@ class EvangelionEC :
             setUrlWithoutDomain(alternateLink.removePrefix(baseUrl))
             thumbnail_url = thumbnailUrl
             this.status = status
-
+            fetch_type = preferredFetchType(!isMovie)
             genre =
                 labels
                     .filter { it !in EXCLUDED_LABELS && !it.matches(LABEL_FILTER_REGEX) }
@@ -578,17 +587,27 @@ class EvangelionEC :
                     preferences.edit().putString(key, newValue as String).commit()
                 }
             }.also(screen::addPreference)
+
+        SwitchPreferenceCompat(screen.context)
+            .apply {
+                key = PREF_SPLIT_SEASONS_KEY
+                title = "Dividir temporadas"
+                summary = "Mostrar temporadas como entradas separadas"
+                setDefaultValue(PREF_SPLIT_SEASONS_DEFAULT)
+                isChecked = preferences.getBoolean(PREF_SPLIT_SEASONS_KEY, PREF_SPLIT_SEASONS_DEFAULT)
+                setOnPreferenceChangeListener { _, newValue ->
+                    preferences.edit().putBoolean(key, newValue as Boolean).commit()
+                }
+            }.also(screen::addPreference)
     }
 
     // ============================== Helpers ===============================
 
-    /*
     private fun preferredFetchType(hasSeasons: Boolean): FetchType = if (hasSeasons && preferences.getBoolean(PREF_SPLIT_SEASONS_KEY, PREF_SPLIT_SEASONS_DEFAULT)) {
         FetchType.Seasons
     } else {
         FetchType.Episodes
     }
-     */
 
     private fun String.toAbsoluteUrl(): String = if (startsWith("http")) this else "$baseUrl$this"
 
@@ -597,16 +616,16 @@ class EvangelionEC :
         return "${this}${if ('?' in this) '&' else '?'}m=0"
     }
 
-    private fun List<Video>.sortVideos(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         return sortedWith(
             compareBy(
-                { it.quality.contains(server, ignoreCase = true).not() },
-                { it.quality.contains(quality).not() },
+                { it.videoTitle.contains(server, ignoreCase = true).not() },
+                { it.videoTitle.contains(quality).not() },
                 {
                     RESOLUTION_REGEX
-                        .find(it.quality)
+                        .find(it.videoTitle)
                         ?.groupValues
                         ?.get(1)
                         ?.toIntOrNull() ?: 0

@@ -10,7 +10,6 @@ import aniyomi.lib.mp4uploadextractor.Mp4uploadExtractor
 import aniyomi.lib.okruextractor.OkruExtractor
 import aniyomi.lib.streamlareextractor.StreamlareExtractor
 import aniyomi.lib.streamtapeextractor.StreamTapeExtractor
-import aniyomi.lib.streamwishextractor.StreamWishExtractor
 import aniyomi.lib.upstreamextractor.UpstreamExtractor
 import aniyomi.lib.uqloadextractor.UqloadExtractor
 import aniyomi.lib.vidguardextractor.VidGuardExtractor
@@ -37,6 +36,8 @@ import okhttp3.Response
 open class PelisForte :
     AnimeHttpSource(),
     ConfigurableAnimeSource {
+
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
 
     override val name = "PelisForte"
 
@@ -239,16 +240,16 @@ open class PelisForte :
         "vidguard" to listOf("vembed", "guard", "listeamed", "bembed", "vgfplay", "bembed"),
     )
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         val lang = preferences.getString(PREF_LANGUAGE_KEY, PREF_LANGUAGE_DEFAULT)!!
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(lang) },
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains(lang) },
+                { it.videoTitle.contains(server, true) },
+                { it.videoTitle.contains(quality) },
+                { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }

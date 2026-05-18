@@ -41,6 +41,8 @@ class Hentaila :
     AnimeHttpSource(),
     ConfigurableAnimeSource {
 
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
     override val name = "Hentaila"
     override val baseUrl = "https://hentaila.com"
     override val lang = "es"
@@ -285,7 +287,7 @@ class Hentaila :
 
                         "voe" -> voeExtractor.videosFromUrl(each.url)
 
-                        "arc" -> listOf(Video(each.url.substringAfter("#"), "Arc", each.url.substringAfter("#")))
+                        "arc" -> listOf(Video(videoUrl = each.url.substringAfter("#"), videoTitle = "Arc"))
 
                         "yupi", "yourupload" -> yourUploadExtractor.videoFromUrl(each.url, headers = headers)
 
@@ -318,14 +320,14 @@ class Hentaila :
         "mediafire" to listOf("mediafire"),
     )
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT).orEmpty()
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT).orEmpty()
 
         return sortedWith(
-            compareBy<Video> { it.quality.contains(server, ignoreCase = true) }
-                .thenBy { it.quality.contains(quality) }
-                .thenBy { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+            compareBy<Video> { it.videoTitle.contains(server, ignoreCase = true) }
+                .thenBy { it.videoTitle.contains(quality) }
+                .thenBy { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
         ).reversed()
     }
 

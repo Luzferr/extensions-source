@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -58,6 +59,10 @@ class NewGrounds :
             .add("Referer", baseUrl)
             .build()
     }
+
+    override fun seasonListSelector(): String = throw UnsupportedOperationException("Not Used")
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException("Not Used")
 
     // Latest
 
@@ -327,9 +332,14 @@ class NewGrounds :
         return episodes.reversed()
     }
 
-    override fun videoListRequest(episode: SEpisode): Request = GET("$baseUrl${episode.url}", videoListHeaders)
+    override fun hosterListRequest(episode: SEpisode): Request = GET("$baseUrl${episode.url}", videoListHeaders)
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private fun videoListParse(response: Response): List<Video> {
         val responseBody = response.body.string()
         val json = JSONObject(responseBody)
         val sources = json.getJSONObject("sources")
@@ -344,9 +354,8 @@ class NewGrounds :
 
                 videos.add(
                     Video(
-                        url = videoUrl,
-                        quality = quality,
                         videoUrl = videoUrl,
+                        videoTitle = quality,
                         headers = headers,
                     ),
                 )
@@ -355,13 +364,6 @@ class NewGrounds :
 
         return videos
     }
-
-    override fun videoListSelector(): String = throw UnsupportedOperationException("Not Used")
-
-    override fun videoFromElement(element: Element): Video = throw UnsupportedOperationException("Not Used")
-
-    override fun videoUrlParse(document: Document): String = throw UnsupportedOperationException("Not Used")
-
     // ============================== Filters ===============================
 
     override fun getFilterList(): AnimeFilterList = AnimeFilterList(

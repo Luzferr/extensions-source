@@ -1,6 +1,7 @@
 package eu.kanade.tachiyomi.animeextension.es.beatzanime
 
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -19,6 +20,10 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 class BeatZAnime : ParsedAnimeHttpSource() {
+
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
 
     override val name = "BeatZ Anime"
 
@@ -242,7 +247,14 @@ class BeatZAnime : ParsedAnimeHttpSource() {
 
     // ============================ Video Links =============================
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
+        val videos = getVideoList(episode)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    override fun hosterListParse(response: Response): List<Hoster> = throw UnsupportedOperationException()
+
+    suspend fun getVideoList(episode: SEpisode): List<Video> {
         val url = indexHttpUrl.newBuilder().apply {
             addPathSegment("api")
             addPathSegment("raw")
@@ -257,14 +269,8 @@ class BeatZAnime : ParsedAnimeHttpSource() {
             add("Referer", indexHttpUrl.newBuilder().addPathSegments(path).build().toString())
         }.build()
 
-        return listOf(Video(url, "Video", url, videoHeaders))
+        return listOf(Video(videoUrl = url, videoTitle = "Video", headers = videoHeaders))
     }
-
-    override fun videoListSelector() = throw UnsupportedOperationException()
-
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
 
     // ============================= Utilities ==============================
 

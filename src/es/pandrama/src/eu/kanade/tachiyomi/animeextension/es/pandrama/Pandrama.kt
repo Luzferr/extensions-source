@@ -8,6 +8,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -28,6 +29,8 @@ import java.net.URLDecoder
 class Pandrama :
     AnimeHttpSource(),
     ConfigurableAnimeSource {
+
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
 
     override val id: Long = 8290662435507939982
 
@@ -113,41 +116,42 @@ class Pandrama :
         GenreFilter(),
     )
 
-    private class GenreFilter : UriPartFilter(
-        "Género",
-        arrayOf(
-            Pair("<Seleccionar>", ""),
-            Pair("Acción", "/explorar/Dramas---Acción-----page---/"),
-            Pair("Comedia", "/explorar/Dramas---Comedia-----page---/"),
-            Pair("Crimen", "/explorar/Dramas---Crimen-----page---/"),
-            Pair("BL", "/explorar/Dramas---BL-----page---/"),
-            Pair("GL", "/explorar/Dramas---GL-----page---/"),
-            Pair("Investigación", "/explorar/Dramas---Investigación-----page---/"),
-            Pair("Drama", "/explorar/Dramas---Drama-----page---/"),
-            Pair("Familiar", "/explorar/Dramas---Familiar-----page---/"),
-            Pair("Fantasía", "/explorar/Dramas---Fantasía-----page---/"),
-            Pair("De época", "/explorar/Dramas---De+época-----page---/"),
-            Pair("Juvenil", "/explorar/Dramas---Juvenil-----page---/"),
-            Pair("Legal", "/explorar/Dramas---Legal-----page---/"),
-            Pair("Maduro", "/explorar/Dramas---Maduro-----page---/"),
-            Pair("Médico", "/explorar/Dramas---Médico-----page---/"),
-            Pair("Melodrama", "/explorar/Dramas---Melodrama-----page---/"),
-            Pair("Militar", "/explorar/Dramas---Militar-----page---/"),
-            Pair("Misterio", "/explorar/Dramas---Misterio-----page---/"),
-            Pair("Musical", "/explorar/Dramas---Musical-----page---/"),
-            Pair("Oficina", "/explorar/Dramas---Oficina-----page---/"),
-            Pair("Politica", "/explorar/Dramas---Politica-----page---/"),
-            Pair("Psicológico", "/explorar/Dramas---Psicológico-----page---/"),
-            Pair("Romance", "/explorar/Dramas---Romance-----page---/"),
-            Pair("Rom&Com", "/explorar/Dramas---Rom%26Com-----page---/"),
-            Pair("Escolar", "/explorar/Dramas---Escolar-----page---/"),
-            Pair("Ciencia Ficción", "/explorar/Dramas---Ciencia+Ficción-----page---/"),
-            Pair("Deportes", "/explorar/Dramas---Deportes-----page---/"),
-            Pair("Sobrenatural", "/explorar/Dramas---Sobrenatural-----page---/"),
-            Pair("Suspenso", "/explorar/Dramas---Suspenso-----page---/"),
-            Pair("Terror", "/explorar/Dramas---Terror-----page---/"),
-        ),
-    )
+    private class GenreFilter :
+        UriPartFilter(
+            "Género",
+            arrayOf(
+                Pair("<Seleccionar>", ""),
+                Pair("Acción", "/explorar/Dramas---Acción-----page---/"),
+                Pair("Comedia", "/explorar/Dramas---Comedia-----page---/"),
+                Pair("Crimen", "/explorar/Dramas---Crimen-----page---/"),
+                Pair("BL", "/explorar/Dramas---BL-----page---/"),
+                Pair("GL", "/explorar/Dramas---GL-----page---/"),
+                Pair("Investigación", "/explorar/Dramas---Investigación-----page---/"),
+                Pair("Drama", "/explorar/Dramas---Drama-----page---/"),
+                Pair("Familiar", "/explorar/Dramas---Familiar-----page---/"),
+                Pair("Fantasía", "/explorar/Dramas---Fantasía-----page---/"),
+                Pair("De época", "/explorar/Dramas---De+época-----page---/"),
+                Pair("Juvenil", "/explorar/Dramas---Juvenil-----page---/"),
+                Pair("Legal", "/explorar/Dramas---Legal-----page---/"),
+                Pair("Maduro", "/explorar/Dramas---Maduro-----page---/"),
+                Pair("Médico", "/explorar/Dramas---Médico-----page---/"),
+                Pair("Melodrama", "/explorar/Dramas---Melodrama-----page---/"),
+                Pair("Militar", "/explorar/Dramas---Militar-----page---/"),
+                Pair("Misterio", "/explorar/Dramas---Misterio-----page---/"),
+                Pair("Musical", "/explorar/Dramas---Musical-----page---/"),
+                Pair("Oficina", "/explorar/Dramas---Oficina-----page---/"),
+                Pair("Politica", "/explorar/Dramas---Politica-----page---/"),
+                Pair("Psicológico", "/explorar/Dramas---Psicológico-----page---/"),
+                Pair("Romance", "/explorar/Dramas---Romance-----page---/"),
+                Pair("Rom&Com", "/explorar/Dramas---Rom%26Com-----page---/"),
+                Pair("Escolar", "/explorar/Dramas---Escolar-----page---/"),
+                Pair("Ciencia Ficción", "/explorar/Dramas---Ciencia+Ficción-----page---/"),
+                Pair("Deportes", "/explorar/Dramas---Deportes-----page---/"),
+                Pair("Sobrenatural", "/explorar/Dramas---Sobrenatural-----page---/"),
+                Pair("Suspenso", "/explorar/Dramas---Suspenso-----page---/"),
+                Pair("Terror", "/explorar/Dramas---Terror-----page---/"),
+            ),
+        )
 
     override fun episodeListParse(response: Response): List<SEpisode> {
         val document = response.asJsoup()
@@ -161,7 +165,14 @@ class Pandrama :
         }.reversed()
     }
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
+        val videos = getVideoList(episode)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    override fun hosterListParse(response: Response): List<Hoster> = throw UnsupportedOperationException()
+
+    suspend fun getVideoList(episode: SEpisode): List<Video> {
         val serverData = json.decodeFromString<List<String>>(episode.url)
         return serverData.parallelCatchingFlatMapBlocking {
             val page = client.newCall(GET(it)).execute().asJsoup()
@@ -190,14 +201,14 @@ class Pandrama :
         }
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains(server, true) },
+                { it.videoTitle.contains(quality) },
+                { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }
@@ -236,8 +247,7 @@ class Pandrama :
         }.also(screen::addPreference)
     }
 
-    private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) :
-        AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
+    private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
         fun toUriPart() = vals[state].second
     }
 

@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -21,7 +22,6 @@ import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.utils.commonEmptyRequestBody
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.encodeToString
@@ -29,6 +29,7 @@ import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okio.ProtocolException
@@ -223,7 +224,7 @@ class GoogleDrive :
             val newPostUrl = "https://drive.usercontent.google.com/uc?id=${it.id}&authuser=0&export=download"
 
             val newResponse = client.newCall(
-                POST(newPostUrl, headers = newPostHeaders, body = commonEmptyRequestBody),
+                POST(newPostUrl, headers = newPostHeaders, body = RequestBody.EMPTY),
             ).execute().parseAs<DownloadResponse> { JSON_REGEX.find(it)!!.groupValues[1] }
 
             val downloadHeaders = headers.newBuilder().apply {
@@ -352,8 +353,22 @@ class GoogleDrive :
     override fun episodeListParse(response: Response): List<SEpisode> = throw UnsupportedOperationException()
 
     // ============================ Video Links =============================
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> = GoogleDriveExtractor(client, headers).videosFromUrl(episode.url.substringAfter("?id="))
+    override fun hosterListRequest(episode: SEpisode): Request = throw UnsupportedOperationException("Not used")
+
+    override fun hosterListParse(response: Response): List<Hoster> = throw UnsupportedOperationException("Not used")
+
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
+        val videos = GoogleDriveExtractor(client, headers).videosFromUrl(episode.url.substringAfter("?id="))
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    override suspend fun getVideoList(hoster: Hoster): List<Video> = hoster.videoList.orEmpty()
+
+    override fun videoListRequest(hoster: Hoster): Request = throw UnsupportedOperationException("Not used")
+
+    override fun videoListParse(response: Response, hoster: Hoster): List<Video> = throw UnsupportedOperationException("Not used")
 
     // ============================= Utilities ==============================
 

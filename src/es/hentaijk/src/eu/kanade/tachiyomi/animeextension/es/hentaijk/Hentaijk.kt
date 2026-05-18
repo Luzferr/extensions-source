@@ -7,6 +7,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -115,7 +116,16 @@ class Hentaijk :
 
     override fun episodeFromElement(element: Element) = throw UnsupportedOperationException()
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         val episodeLink = response.request.url.toString()
         val videos = mutableListOf<Video>()
@@ -158,7 +168,7 @@ class Hentaijk :
                                 nozomitext.toString().split("}").forEach { file ->
                                     val nozomiUrl = file.substringAfter("\"file\":\"").substringBefore("\"").replace("\\", "")
                                     if (nozomiUrl.isNotBlank() && !nozomiUrl.contains("{")) {
-                                        videos.add(Video(nozomiUrl, server, nozomiUrl))
+                                        videos.add(Video(videoUrl = nozomiUrl, videoTitle = server))
                                     }
                                 }
                             }
@@ -166,7 +176,7 @@ class Hentaijk :
 
                     when {
                         "ok" in url -> OkruExtractor(client).videosFromUrl(url).forEach { videos.add(it) }
-                        "stream/jkmedia" in url -> videos.add(Video(url, "Xtreme S", url))
+                        "stream/jkmedia" in url -> videos.add(Video(videoUrl = url, videoTitle = "Xtreme S"))
                         "um.php" in url -> videos.add(HentaijkExtractor().videoFromUrl(url, server))
                     }
                 }
@@ -183,22 +193,16 @@ class Hentaijk :
                     url1 = it.data().substringAfter("url: '").substringBefore("'")
                 }
             }
-            return Video(url1, server, url1)
+            return Video(videoUrl = url1, videoTitle = server)
         }
     }
 
-    override fun videoListSelector() = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
-
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
-
-    override fun List<Video>.sort(): List<Video> = try {
+    override fun List<Video>.sortVideos(): List<Video> = try {
         val videoSorted = this.sortedWith(
-            compareBy<Video> { it.quality.replace("[0-9]".toRegex(), "") }.thenByDescending { getNumberFromString(it.quality) },
+            compareBy<Video> { it.videoTitle.replace("[0-9]".toRegex(), "") }.thenByDescending { getNumberFromString(it.videoTitle) },
         ).toTypedArray()
         val userPreferredQuality = preferences.getString("preferred_quality", "Sabrosio")
-        val preferredIdx = videoSorted.indexOfFirst { x -> x.quality == userPreferredQuality }
+        val preferredIdx = videoSorted.indexOfFirst { x -> x.videoTitle == userPreferredQuality }
         if (preferredIdx != -1) {
             videoSorted.drop(preferredIdx + 1)
             videoSorted[0] = videoSorted[preferredIdx]

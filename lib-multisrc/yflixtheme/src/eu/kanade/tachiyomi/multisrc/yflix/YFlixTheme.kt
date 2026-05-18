@@ -7,6 +7,7 @@ import aniyomi.lib.rapidshareextractor.RapidShareExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -35,7 +36,7 @@ import java.math.RoundingMode
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-open class YFlixTheme(
+abstract class YFlixTheme(
     override val name: String,
     protected val domainList: List<String>,
     protected val defaultDomain: String = "https://${domainList.first()}",
@@ -276,7 +277,14 @@ open class YFlixTheme(
 
     protected open val serversSelector = "li.server"
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
+        val videos = getVideoList(episode)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    override fun hosterListParse(response: Response): List<Hoster> = throw UnsupportedOperationException()
+
+    suspend fun getVideoList(episode: SEpisode): List<Video> {
         val (animeUrl, episodeId) = episode.url.split('#', limit = 2)
         val referer = baseUrl + animeUrl
 
@@ -332,7 +340,7 @@ open class YFlixTheme(
 
     protected open fun parseDate(dateStr: String): Long = runCatching { DATE_FORMATTER.parse(dateStr)?.time }.getOrNull() ?: 0L
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.qualityPref
         val server = preferences.serverPref
         val qualities = QUALITIES.reversed()
@@ -340,14 +348,14 @@ open class YFlixTheme(
         return sortedWith(
             // Prioritize videos that have the exact preferred quality and server
             compareByDescending<Video> {
-                it.quality.contains(quality, true) && it.quality.startsWith(server, true)
+                it.videoTitle.contains(quality, true) && it.videoTitle.startsWith(server, true)
             }
                 // Then, prioritize videos with the preferred quality from any server
-                .thenByDescending { it.quality.contains(quality, true) }
+                .thenByDescending { it.videoTitle.contains(quality, true) }
                 // Then, prioritize videos from the preferred server with any quality
-                .thenByDescending { it.quality.startsWith(server, true) }
+                .thenByDescending { it.videoTitle.startsWith(server, true) }
                 // Finally, sort by the quality list as a fallback
-                .thenByDescending { video -> qualities.indexOfFirst { video.quality.contains(it) } },
+                .thenByDescending { video -> qualities.indexOfFirst { video.videoTitle.contains(it) } },
         )
     }
 

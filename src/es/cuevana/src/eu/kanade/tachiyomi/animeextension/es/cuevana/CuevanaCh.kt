@@ -14,11 +14,14 @@ import aniyomi.lib.streamwishextractor.StreamWishExtractor
 import aniyomi.lib.universalextractor.UniversalExtractor
 import aniyomi.lib.upstreamextractor.UpstreamExtractor
 import aniyomi.lib.uqloadextractor.UqloadExtractor
+import aniyomi.lib.vidhideextractor.VidHideExtractor
 import aniyomi.lib.voeextractor.VoeExtractor
 import aniyomi.lib.youruploadextractor.YourUploadExtractor
+import eu.kanade.tachiyomi.animeextension.es.cuevana.models.Server
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -30,12 +33,16 @@ import keiyoushi.utils.catchingFlatMapBlocking
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.tryParse
 import keiyoushi.utils.useAsJsoup
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import uy.kohesive.injekt.injectLazy
+import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -118,7 +125,16 @@ class CuevanaCh(override val name: String, override val baseUrl: String) :
 
     override fun episodeFromElement(element: Element) = throw UnsupportedOperationException()
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         return document.select("ul.anime_muti_link li").catchingFlatMapBlocking {
             val languageTag = it.selectFirst(".cdtr span")?.text()?.lowercase() ?: ""
@@ -150,7 +166,7 @@ class CuevanaCh(override val name: String, override val baseUrl: String) :
                         client.newCall(GET("https://www.amazon.com/drive/v1/nodes/$epId/children?resourceVersion=V2&ContentType=JSON&limit=200&sort=%5B%22kind+DESC%22%2C+%22modifiedDate+DESC%22%5D&asset=ALL&tempLink=true&shareId=$shareId"))
                             .awaitSuccess().useAsJsoup()
                     val videoUrl = amazonApi.toString().substringAfter("\"FOLDER\":").substringAfter("tempLink\":\"").substringBefore("\"")
-                    listOf(Video(videoUrl, "$prefix Amazon", videoUrl))
+                    listOf(Video(videoUrl = videoUrl, videoTitle = "$prefix Amazon"))
                 } else {
                     emptyList()
                 }
@@ -235,7 +251,7 @@ class CuevanaCh(override val name: String, override val baseUrl: String) :
                 val status = json["status"]!!.jsonPrimitive.content
                 val file = json["file"]!!.jsonPrimitive.content
                 if (status == "200") {
-                    listOf(Video(file, "$prefix Tomatomatela", file, headers = null))
+                    listOf(Video(videoUrl = file, videoTitle = "$prefix Tomatomatela"))
                 } else {
                     emptyList()
                 }
@@ -262,23 +278,21 @@ class CuevanaCh(override val name: String, override val baseUrl: String) :
     private val filemoonExtractor by lazy { FilemoonExtractor(client) }
     private val universalExtractor by lazy { UniversalExtractor(client) }
 
-    private fun loadExtractor(url: String, prefix: String = "", serverName: String? = ""): List<Video> {
-        return runCatching {
-            val source = serverName?.ifEmpty { url } ?: url
-            val matched = conventions.firstOrNull { (_, names) -> names.any { it.lowercase() in source.lowercase() } }?.first
-            when (matched) {
-                "voe" -> voeExtractor.videosFromUrl(url, "$prefix ")
-                "okru" -> okruExtractor.videosFromUrl(url, prefix)
-                "filemoon" -> filemoonExtractor.videosFromUrl(url, prefix = "$prefix Filemoon:")
-                "streamwish" -> streamWishExtractor.videosFromUrl(url, videoNameGen = { "$prefix StreamWish:$it" })
-                "doodstream" -> doodExtractor.videosFromUrl(url, "$prefix DoodStream")
-                "yourupload" -> yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = "$prefix ")
-                "streamtape" -> streamTapeExtractor.videosFromUrl(url, quality = "$prefix StreamTape")
-                "vidhide" -> vidHideExtractor.videosFromUrl(url, videoNameGen = { "$prefix VidHide:$it" })
-                else -> universalExtractor.videosFromUrl(url, headers, prefix = "$prefix ")
-            }
-        }.getOrDefault(emptyList())
-    }
+    private fun loadExtractor(url: String, prefix: String = "", serverName: String? = ""): List<Video> = runCatching {
+        val source = serverName?.ifEmpty { url } ?: url
+        val matched = conventions.firstOrNull { (_, names) -> names.any { it.lowercase() in source.lowercase() } }?.first
+        when (matched) {
+            "voe" -> voeExtractor.videosFromUrl(url, "$prefix ")
+            "okru" -> okruExtractor.videosFromUrl(url, prefix)
+            "filemoon" -> filemoonExtractor.videosFromUrl(url, prefix = "$prefix Filemoon:")
+            "streamwish" -> streamWishExtractor.videosFromUrl(url, videoNameGen = { "$prefix StreamWish:$it" })
+            "doodstream" -> doodExtractor.videosFromUrl(url, "$prefix DoodStream")
+            "yourupload" -> yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = "$prefix ")
+            "streamtape" -> streamTapeExtractor.videosFromUrl(url, quality = "$prefix StreamTape")
+            "vidhide" -> runBlocking { vidHideExtractor.videosFromUrl(url, videoNameGen = { "$prefix VidHide:$it" }) }
+            else -> universalExtractor.videosFromUrl(url, headers, prefix = "$prefix ")
+        }
+    }.getOrDefault(emptyList())
 
     private val conventions = listOf(
         "voe" to listOf("voe", "tubelessceliolymph", "simpulumlamerop", "urochsunloath", "nathanfromsubject", "yip.", "metagnathtuggers", "donaldlineelse"),
@@ -290,12 +304,6 @@ class CuevanaCh(override val name: String, override val baseUrl: String) :
         "streamtape" to listOf("streamtape", "stp", "stape", "shavetape"),
         "vidhide" to listOf("ahvsh", "streamhide", "guccihide", "streamvid", "vidhide", "kinoger", "smoothpre", "dhtpre", "peytonepre", "earnvids", "ryderjet"),
     )
-
-    override fun videoListSelector() = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
-
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
 
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
         val filterList = if (filters.isEmpty()) getFilterList() else filters
@@ -363,16 +371,16 @@ class CuevanaCh(override val name: String, override val baseUrl: String) :
             ),
         )
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         val lang = preferences.getString(PREF_LANGUAGE_KEY, PREF_LANGUAGE_DEFAULT)!!
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(lang) },
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains(lang) },
+                { it.videoTitle.contains(server, true) },
+                { it.videoTitle.contains(quality) },
+                { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }

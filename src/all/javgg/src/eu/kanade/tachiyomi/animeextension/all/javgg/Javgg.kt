@@ -10,6 +10,7 @@ import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -35,7 +36,7 @@ class Javgg :
 
     override val supportsLatest = true
 
-    override val supportsRelatedAnimes = false
+    val supportsRelatedAnimes = false
 
     private val preferences by getPreferencesLazy()
 
@@ -127,7 +128,7 @@ class Javgg :
         return AnimesPage(animeList, nextPage)
     }
 
-    override fun String.stripKeywordForRelatedAnimes(): List<String> {
+    fun String.stripKeywordForRelatedAnimes(): List<String> {
         val regexWhitespace = Regex("\\s+")
         val regexSpecialCharacters =
             Regex("([-!~#$%^&*+_|/\\\\,?:;'“”‘’\"<>(){}\\[\\]。・～：—！？、―«»《》〘〙【】「」｜]|\\s-|-\\s|\\s\\.|\\.\\s)")
@@ -159,7 +160,14 @@ class Javgg :
         }
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         return document.select("[id*=source-player] iframe").parallelCatchingFlatMapBlocking {
             val numOpt = it.closest(".source-box")?.attr("id")?.replace("source-player-", "")
@@ -198,7 +206,7 @@ class Javgg :
                     add("Referer", "https://${turboDocument.location().toHttpUrl().host}/")
                 }.build()
 
-                listOf(Video(masterUrl, "TurboPlay", masterUrl, customHeaders))
+                listOf(Video(videoUrl = masterUrl, videoTitle = "TurboPlay", headers = customHeaders))
             }
 
             else -> emptyList()
@@ -224,14 +232,14 @@ class Javgg :
         return textMatches?.value ?: htmlMatches?.value
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains(server, true) },
+                { it.videoTitle.contains(quality) },
+                { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }

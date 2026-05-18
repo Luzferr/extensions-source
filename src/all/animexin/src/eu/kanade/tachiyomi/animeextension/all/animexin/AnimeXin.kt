@@ -74,14 +74,14 @@ class AnimeXin :
     }
 
     // ============================= Utilities ==============================
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(prefQualityKey, prefQualityDefault)!!
         val language = preferences.getString(PREF_LANG_KEY, PREF_LANG_DEFAULT)!!
 
         return sortedWith(
             compareBy(
-                { it.quality.contains(quality) },
-                { it.quality.contains(language, true) },
+                { it.videoTitle.contains(quality) },
+                { it.videoTitle.contains(language, true) },
             ),
         ).reversed()
     }

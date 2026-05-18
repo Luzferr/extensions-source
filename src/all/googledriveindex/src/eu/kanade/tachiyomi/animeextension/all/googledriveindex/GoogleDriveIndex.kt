@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -443,8 +444,24 @@ class GoogleDriveIndex :
     override fun episodeListParse(response: Response): List<SEpisode> = throw UnsupportedOperationException()
 
     // ============================ Video Links =============================
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    override fun hosterListRequest(episode: SEpisode): Request = throw UnsupportedOperationException("Not used")
+
+    override fun hosterListParse(response: Response): List<Hoster> = throw UnsupportedOperationException("Not used")
+
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
+        val videos = getVideoList(episode)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    override suspend fun getVideoList(hoster: Hoster): List<Video> = hoster.videoList.orEmpty()
+
+    override fun videoListRequest(hoster: Hoster): Request = throw UnsupportedOperationException("Not used")
+
+    override fun videoListParse(response: Response, hoster: Hoster): List<Video> = throw UnsupportedOperationException("Not used")
+
+    private suspend fun getVideoList(episode: SEpisode): List<Video> {
         val url = episode.url
 
         val doc = client.newCall(
@@ -453,10 +470,10 @@ class GoogleDriveIndex :
 
         val script = doc.selectFirst("script:containsData(videodomain)")?.data()
             ?: doc.selectFirst("script:containsData(downloaddomain)")?.data()
-            ?: return listOf(Video(url, "Video", url))
+            ?: return listOf(Video(videoUrl = url, videoTitle = "Video"))
 
         if (script.contains("\"second_domain_for_dl\":false")) {
-            return listOf(Video(url, "Video", url))
+            return listOf(Video(videoUrl = url, videoTitle = "Video"))
         }
 
         val domainUrl = if (script.contains("videodomain", true)) {
@@ -475,7 +492,7 @@ class GoogleDriveIndex :
             domainUrl + url.toHttpUrl().encodedPath
         }
 
-        return listOf(Video(videoUrl, "Video", videoUrl))
+        return listOf(Video(videoUrl = videoUrl, videoTitle = "Video"))
     }
 
     // ============================= Utilities ==============================

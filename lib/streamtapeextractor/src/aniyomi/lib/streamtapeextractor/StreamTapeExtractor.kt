@@ -27,9 +27,8 @@ class StreamTapeExtractor(private val client: OkHttpClient) {
             script.substringAfter("+ ('xcd").substringBefore("'")
 
         return Video(
-            url = videoUrl,
-            quality = quality,
             videoUrl = videoUrl,
+            videoTitle = quality,
             subtitleTracks = subtitleList,
             audioTracks = emptyList(),
         )

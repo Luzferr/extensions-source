@@ -47,6 +47,8 @@ class Jkanime :
     AnimeHttpSource(),
     ConfigurableAnimeSource {
 
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
     override val name = "Jkanime"
 
     override val baseUrl = "https://jkanime.net"
@@ -468,16 +470,16 @@ class Jkanime :
         "mega" to listOf("mega.nz"),
     )
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.qualityPref
         val server = preferences.serverPref
         val lang = preferences.langPref
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(lang) },
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains(lang) },
+                { it.videoTitle.contains(server, true) },
+                { it.videoTitle.contains(quality) },
+                { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }

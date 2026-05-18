@@ -323,13 +323,12 @@ class AnimeLatinoHD :
         return GET(filterUrl)
     }
 
-    override fun getFilterList(): AnimeFilterList =
-        AnimeFilterList(
-            AnimeFilter.Header("La busqueda por texto ignora los filtros"),
-            GenreFilter(),
-            StateFilter(),
-            TypeFilter(),
-        )
+    override fun getFilterList(): AnimeFilterList = AnimeFilterList(
+        AnimeFilter.Header("La busqueda por texto ignora los filtros"),
+        GenreFilter(),
+        StateFilter(),
+        TypeFilter(),
+    )
 
     override fun searchAnimeParse(response: Response): AnimesPage {
         val document = response.asJsoup()

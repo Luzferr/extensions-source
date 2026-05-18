@@ -8,6 +8,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -203,15 +204,31 @@ class NyaaTorrent(extName: String, private val extURL: String, private val extId
 
     override fun episodeFromElement(element: Element) = throw Exception("Not used")
 
+    override fun seasonListSelector() = throw Exception("Not used")
+
+    override fun seasonFromElement(element: Element) = throw Exception("Not used")
+
     // ============================ Video Links =============================
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> = listOf(Video(episode.url, episode.name, episode.url))
+    override fun hosterListRequest(episode: SEpisode): Request = GET(baseUrl, headers)
+        .newBuilder()
+        .tag(SEpisode::class.java, episode)
+        .build()
 
-    override fun videoListSelector() = throw Exception("Not used")
-
-    override fun videoFromElement(element: Element) = throw Exception("Not used")
-
-    override fun videoUrlParse(document: Document) = throw Exception("Not used")
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val episode = response.request.tag(SEpisode::class.java) ?: throw Exception("Missing episode context")
+        return listOf(
+            Hoster(
+                hosterName = name,
+                videoList = listOf(
+                    Video(
+                        videoUrl = episode.url,
+                        videoTitle = episode.name,
+                    ),
+                ),
+            ),
+        )
+    }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         EditTextPreference(screen.context).apply {

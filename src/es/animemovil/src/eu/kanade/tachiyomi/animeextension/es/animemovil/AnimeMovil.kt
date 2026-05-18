@@ -19,7 +19,6 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
-import eu.kanade.tachiyomi.animesource.model.FetchType
 import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
@@ -233,23 +232,25 @@ class AnimeMovil :
         val document = response.asJsoup()
         return document.select("#fuentes button").catchingFlatMapBlocking { elm ->
             val url = elm.attr("data-url").substringAfter("redirect.php?id=").trim()
+            val serverName = elm.ownText().trim().ifBlank { name }
             if (url.contains("php?id=")) {
-                val serverName = elm.ownText().trim()
                 val serverDocument = client.newCall(GET(url)).awaitSuccess().useAsJsoup()
                 val fileData = serverDocument.selectFirst("script:containsData(sources: [{file:)")?.data() ?: ""
                 val genericFiles = fetchUrls(fileData)
                 if (genericFiles.any()) {
-                    return@catchingFlatMapBlocking genericFiles.map { fileSrc ->
+                    val videos = genericFiles.map { fileSrc ->
                         val type = when {
                             fileSrc.contains(".m3u8") -> ":HLS"
                             fileSrc.contains(".mp4") -> ":MP4"
                             else -> ""
                         }
-                        Video(fileSrc, "$serverName$type", fileSrc, headers = null)
+                        Video(videoUrl = fileSrc, videoTitle = "$serverName$type")
                     }
+                    return@catchingFlatMapBlocking listOf(Hoster(hosterName = serverName, videoList = videos.sortVideos()))
                 }
             }
-            serverVideoResolver(url)
+            val videos = serverVideoResolver(url)
+            if (videos.isEmpty()) emptyList() else listOf(Hoster(hosterName = serverName, videoList = videos.sortVideos()))
         }
     }
 
@@ -337,14 +338,13 @@ class AnimeMovil :
             ).reversed()
     }
 
-    override fun getFilterList(): AnimeFilterList =
-        AnimeFilterList(
-            AnimeFilter.Header("La busqueda por texto ignora el filtro"),
-            GenreFilter(),
-            TypeFilter(),
-            StatusFilter(),
-            LanguageFilter(),
-        )
+    override fun getFilterList(): AnimeFilterList = AnimeFilterList(
+        AnimeFilter.Header("La busqueda por texto ignora el filtro"),
+        GenreFilter(),
+        TypeFilter(),
+        StatusFilter(),
+        LanguageFilter(),
+    )
 
     private class GenreFilter :
         UriPartFilter(

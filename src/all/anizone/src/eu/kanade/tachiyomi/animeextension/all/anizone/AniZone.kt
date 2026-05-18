@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
@@ -56,7 +57,7 @@ class AniZone :
 
     private val json: Json by injectLazy()
 
-    private val preferences by getPreferencesLazy()
+    private val preferences: SharedPreferences by getPreferencesLazy()
 
     private var token: String = ""
 
@@ -274,12 +275,21 @@ class AniZone :
     }
 
     // ============================ Video Links =============================
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
 
-    override fun videoListRequest(episode: SEpisode): Request = GET(baseUrl + episode.url, headers)
+    override fun hosterListRequest(episode: SEpisode): Request = GET(baseUrl + episode.url, headers)
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val tempHoster = Hoster(name)
+        val videos = videoListParse(response, tempHoster)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    override fun videoListRequest(hoster: Hoster): Request = throw UnsupportedOperationException("Not used")
 
     private val playlistUtils: PlaylistUtils by lazy { PlaylistUtils(client, headers) }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun videoListParse(response: Response, hoster: Hoster): List<Video> {
         val document = response.asJsoup()
         val serverSelects = document.select("button[wire:click]")
             .filter { video ->
@@ -361,10 +371,10 @@ class AniZone :
         val subtitles: List<Track>,
     )
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.quality
         return sortedWith(
-            compareBy { it.quality.contains(quality) },
+            compareBy { it.videoTitle.contains(quality) },
         ).reversed()
     }
 

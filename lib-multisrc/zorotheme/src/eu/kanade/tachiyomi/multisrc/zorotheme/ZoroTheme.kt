@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -12,7 +13,6 @@ import eu.kanade.tachiyomi.multisrc.zorotheme.dto.HtmlResponse
 import eu.kanade.tachiyomi.multisrc.zorotheme.dto.SourcesResponse
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.await
-import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.utils.LazyMutable
 import keiyoushi.utils.addListPreference
 import keiyoushi.utils.addSetPreference
@@ -158,15 +158,6 @@ abstract class ZoroTheme(
         }
     }
 
-    override fun relatedAnimeListParse(response: Response): List<SAnime> {
-        val relatedAnimeSelector = ".block_area_sidebar .block_area-header:contains(Related Anime) + .block_area-content ul > li"
-
-        val document = response.asJsoup()
-        return listOf(relatedAnimeSelector, relatedAnimeListSelector()).flatMap { selector ->
-            document.select(selector).map { relatedAnimeFromElement(it) }
-        }
-    }
-
     open fun Element.getInfo(
         tag: String,
         isList: Boolean = false,
@@ -215,7 +206,7 @@ abstract class ZoroTheme(
 
     // ============================ Video Links =============================
 
-    override fun videoListRequest(episode: SEpisode): Request {
+    fun videoListRequest(episode: SEpisode): Request {
         val id = episode.url.substringAfterLast("?ep=")
         return GET("$baseUrl/ajax$ajaxRoute/episode/servers?episodeId=$id", apiHeaders(baseUrl + episode.url))
     }
@@ -226,7 +217,14 @@ abstract class ZoroTheme(
         val name: String,
     )
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
+        val videos = getVideoList(episode)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    override fun hosterListParse(response: Response): List<Hoster> = throw UnsupportedOperationException()
+
+    suspend fun getVideoList(episode: SEpisode): List<Video> {
         val response = client.newCall(videoListRequest(episode)).await()
 
         val episodeReferer = response.request.header("referer")!!
@@ -257,12 +255,6 @@ abstract class ZoroTheme(
     }
 
     abstract fun extractVideo(server: VideoData): List<Video>
-
-    override fun videoListSelector() = throw UnsupportedOperationException()
-
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
 
     // ============================= Utilities ==============================
 
@@ -297,15 +289,15 @@ abstract class ZoroTheme(
         return this
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.prefQuality
         val type = preferences.prefType
         val server = preferences.prefServer
 
         return this.sortedWith(
-            compareByDescending<Video> { it.quality.contains(quality) }
-                .thenByDescending { it.quality.contains(server, true) }
-                .thenByDescending { it.quality.contains(type, true) },
+            compareByDescending<Video> { it.videoTitle.contains(quality) }
+                .thenByDescending { it.videoTitle.contains(server, true) }
+                .thenByDescending { it.videoTitle.contains(type, true) },
         )
     }
 

@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.animeextension.all.rouvideo.RouVideoFilter.categories
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -103,7 +104,7 @@ class RouVideo(
             .props.pageProps.toAnimePage()
     }
 
-    override suspend fun fetchRelatedAnimeList(anime: SAnime): List<SAnime> = coroutineScope {
+    suspend fun fetchRelatedAnimeList(anime: SAnime): List<SAnime> = coroutineScope {
         listOf(
             async {
                 client.newCall(relatedAnimeListRequest(anime))
@@ -125,7 +126,9 @@ class RouVideo(
             .flatten()
     }
 
-    override fun relatedAnimeListParse(response: Response): List<SAnime> {
+    private fun relatedAnimeListRequest(anime: SAnime): Request = animeDetailsRequest(anime)
+
+    fun relatedAnimeListParse(response: Response): List<SAnime> {
         val document = response.asJsoup()
         val data = document.selectFirst("script#__NEXT_DATA__")?.data()
             ?: return emptyList()
@@ -439,9 +442,16 @@ class RouVideo(
 
     // ============================ Video Links =============================
 
-    override fun videoListRequest(episode: SEpisode) = GET("$apiUrl/$VIDEO_SLUG/${episode.url}", apiHeaders)
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListRequest(episode: SEpisode) = GET("$apiUrl/$VIDEO_SLUG/${episode.url}", apiHeaders)
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private fun videoListParse(response: Response): List<Video> {
         val jsonStr = response.body.string()
         val data = json.decodeFromString<RouVideoDto.VideoData>(jsonStr).video
 
@@ -452,7 +462,7 @@ class RouVideo(
     }
 
     // Sorts by quality
-    override fun List<Video>.sort(): List<Video> = sortedByDescending { it.quality }
+    override fun List<Video>.sortVideos(): List<Video> = sortedByDescending { it.videoTitle }
 
     // ============================= Utilities ==============================
 

@@ -249,9 +249,8 @@ class MegaUpExtractor(
                 mp4Regex.containsMatchIn(videoUrl) -> {
                     Log.d(tag, "mp4 URL found: $videoUrl")
                     Video(
-                        url = videoUrl,
-                        quality = "$prefix: MP4",
                         videoUrl = videoUrl,
+                        videoTitle = "$prefix: MP4",
                         headers = videoHeaders,
                         subtitleTracks = subtitleTracks,
                     ).let(::listOf)

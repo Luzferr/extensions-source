@@ -35,16 +35,11 @@ import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.tryParse
 import keiyoushi.utils.useAsJsoup
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
 import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -52,6 +47,10 @@ import java.util.Locale
 class Gnula :
     ParsedAnimeHttpSource(),
     ConfigurableAnimeSource {
+
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
 
     override val name = "Gnula"
 
@@ -272,10 +271,10 @@ class Gnula :
                     languageTag = languageTag,
                     serverDisplay = serverDisplay,
                     hoster =
-                        Hoster(
-                            hosterName = "$languageTag $serverDisplay",
-                            videoList = sortedVideos,
-                        ),
+                    Hoster(
+                        hosterName = "$languageTag $serverDisplay",
+                        videoList = sortedVideos,
+                    ),
                 )
             }
 
@@ -408,12 +407,11 @@ class Gnula :
 
         fun Video.matchesQuality() = if (videoTitle.contains(preferredQuality)) 1 else 0
 
-        fun Video.displayResolution(): Int =
-            resolution ?: qualityRegex
-                .find(videoTitle)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull() ?: 0
+        fun Video.displayResolution(): Int = resolution ?: qualityRegex
+            .find(videoTitle)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull() ?: 0
 
         return sortedWith(
             compareBy(

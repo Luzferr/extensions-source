@@ -5,17 +5,11 @@ import android.app.Application
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
-import android.webkit.WebChromeClient
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import aniyomi.lib.rapidcloudextractor.RapidCloudExtractor.VideoDto
 import kotlinx.serialization.json.Json
 import okhttp3.Headers
 import uy.kohesive.injekt.injectLazy
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 class WebViewResolver(private val globalHeaders: Headers) {
     private val context: Application by injectLazy()

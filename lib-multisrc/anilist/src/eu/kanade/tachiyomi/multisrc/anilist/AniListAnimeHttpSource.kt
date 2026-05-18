@@ -18,6 +18,8 @@ import okhttp3.Response
 import uy.kohesive.injekt.injectLazy
 
 abstract class AniListAnimeHttpSource : AnimeHttpSource() {
+
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
     override val supportsLatest = true
     val json by injectLazy<Json>()
 

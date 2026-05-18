@@ -7,6 +7,7 @@ import aniyomi.lib.megaupextractor.MegaUpExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -156,9 +157,9 @@ abstract class AnimeKaiTheme(
 
     // ============================== Related ==============================
 
-    override fun relatedAnimeListSelector() = "#related-anime .aitem-col a.aitem"
+    fun relatedAnimeListSelector() = "#related-anime .aitem-col a.aitem"
 
-    override fun relatedAnimeFromElement(element: Element): SAnime = SAnime.create().apply {
+    fun relatedAnimeFromElement(element: Element): SAnime = SAnime.create().apply {
         setUrlWithoutDomain(element.attr("abs:href").takeIf(String::isNotBlank)!!)
         title = element.selectFirst(".title")?.getTitle()!!
         thumbnail_url = element.getBackgroundImage()
@@ -167,7 +168,7 @@ abstract class AnimeKaiTheme(
     protected open fun recommendedAnimeListSelector() = "section:has(.stitle:contains(Recommended)) .aitem-col a.aitem"
     protected open fun recommendedAnimeFromElement(element: Element) = relatedAnimeFromElement(element)
 
-    override fun relatedAnimeListParse(response: Response): List<SAnime> {
+    fun relatedAnimeListParse(response: Response): List<SAnime> {
         val document = response.asJsoup()
         val related = document.select(relatedAnimeListSelector()).mapNotNull {
             runCatching { relatedAnimeFromElement(it) }.getOrNull()
@@ -286,11 +287,14 @@ abstract class AnimeKaiTheme(
 
     // ============================ Video List ==============================
 
-    override fun videoListSelector() = throw UnsupportedOperationException()
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
+        val videos = getVideoList(episode)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> = throw UnsupportedOperationException()
+
+    suspend fun getVideoList(episode: SEpisode): List<Video> {
         val token = episode.url
         val enc = encDecEndpoints(token)
         val servers = fetchServers(token, enc)
@@ -372,17 +376,17 @@ abstract class AnimeKaiTheme(
 
     // ============================== Video Sort ============================
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = prefQuality
         val server = prefServer
         val type = prefType
         val qualitiesList = PREF_QUALITY_ENTRIES.reversed()
 
         return sortedWith(
-            compareByDescending<Video> { it.quality.contains(quality) }
-                .thenByDescending { video -> qualitiesList.indexOfLast { video.quality.contains(it) } }
-                .thenByDescending { it.quality.contains(server, true) }
-                .thenByDescending { it.quality.contains(type, true) },
+            compareByDescending<Video> { it.videoTitle.contains(quality) }
+                .thenByDescending { video -> qualitiesList.indexOfLast { video.videoTitle.contains(it) } }
+                .thenByDescending { it.videoTitle.contains(server, true) }
+                .thenByDescending { it.videoTitle.contains(type, true) },
         )
     }
 

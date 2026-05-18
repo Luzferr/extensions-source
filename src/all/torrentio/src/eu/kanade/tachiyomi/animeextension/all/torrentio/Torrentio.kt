@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.animeextension.all.torrentio.dto.StreamDataTorrent
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -356,7 +357,9 @@ class Torrentio :
 
     // ============================ Video Links =============================
 
-    override fun videoListRequest(episode: SEpisode): Request {
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
+    override fun hosterListRequest(episode: SEpisode): Request {
         val mainURL = buildString {
             append("$baseUrl/")
 
@@ -397,7 +400,12 @@ class Torrentio :
         return GET(mainURL)
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private fun videoListParse(response: Response): List<Video> {
         val responseString = response.body.string()
         val streamList = json.decodeFromString<StreamDataTorrent>(responseString)
         val debridProvider = preferences.getString(PREF_DEBRID_KEY, "none")
@@ -438,19 +446,22 @@ class Torrentio :
                 } else {
                     stream.url ?: ""
                 }
-            Video(urlOrHash, ((stream.name?.replace("Torrentio\n", "") ?: "") + "\n" + stream.title), urlOrHash)
+            Video(
+                videoUrl = urlOrHash,
+                videoTitle = ((stream.name?.replace("Torrentio\n", "") ?: "") + "\n" + stream.title),
+            )
         }.orEmpty()
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val isDub = preferences.getBoolean(IS_DUB_KEY, IS_DUB_DEFAULT)
         val isEfficient = preferences.getBoolean(IS_EFFICIENT_KEY, IS_EFFICIENT_DEFAULT)
 
         return sortedWith(
             compareBy(
-                { Regex("\\[(.+?) download]").containsMatchIn(it.quality) },
-                { isDub && !it.quality.contains("dubbed", true) },
-                { isEfficient && !arrayOf("hevc", "265", "av1").any { q -> it.quality.contains(q, true) } },
+                { Regex("\\[(.+?) download]").containsMatchIn(it.videoTitle) },
+                { isDub && !it.videoTitle.contains("dubbed", true) },
+                { isEfficient && !arrayOf("hevc", "265", "av1").any { q -> it.videoTitle.contains(q, true) } },
             ),
         )
     }

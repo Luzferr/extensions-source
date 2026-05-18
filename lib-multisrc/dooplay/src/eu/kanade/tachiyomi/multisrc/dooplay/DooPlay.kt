@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.multisrc.dooplay
 
+import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
@@ -11,11 +12,12 @@ import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
+import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.utils.getPreferencesLazy
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -65,7 +67,7 @@ abstract class DooPlay(
     protected open val videoSortPrefDefault = prefQualityDefault
 
     // ============================== Popular ===============================
-    protected open fun popularAnimeSelector() = "article.w_item_a > a"
+    override fun popularAnimeSelector() = "article.w_item_a > a"
 
     override fun popularAnimeRequest(page: Int) = GET(baseUrl)
 
@@ -77,7 +79,7 @@ abstract class DooPlay(
         thumbnail_url = img.getImageUrl()
     }
 
-    protected open fun popularAnimeNextPageSelector(): String? = null
+    override fun popularAnimeNextPageSelector(): String? = null
 
     override fun popularAnimeParse(response: Response): AnimesPage {
         fetchGenresList()
@@ -94,7 +96,7 @@ abstract class DooPlay(
     }
 
     // ============================== Episodes ==============================
-    protected open fun episodeListSelector() = "ul.episodios > li"
+    override fun episodeListSelector() = "ul.episodios > li"
 
     protected open val episodeNumberRegex by lazy { "(\\d+)$".toRegex() }
     protected open val seasonListSelector = "div#seasons > div"
@@ -137,7 +139,7 @@ abstract class DooPlay(
         }
     }
 
-    protected open fun episodeFromElement(element: Element): SEpisode = throw UnsupportedOperationException()
+    override fun episodeFromElement(element: Element): SEpisode = throw UnsupportedOperationException()
 
     protected open fun episodeFromElement(element: Element, seasonName: String): SEpisode = SEpisode.create().apply {
         val epNum = element.selectFirst("div.numerando")!!.text()
@@ -163,7 +165,7 @@ abstract class DooPlay(
     // =============================== Search ===============================
 
     private fun searchAnimeByPathParse(response: Response): AnimesPage {
-        val details = animeDetailsParse(response).apply {
+        val details = animeDetailsParse(response.asJsoup()).apply {
             setUrlWithoutDomain(response.request.url.toString())
             initialized = true
         }
@@ -176,25 +178,13 @@ abstract class DooPlay(
         val url = response.request.url.toString()
 
         val animes =
-            when {
-                "/?s=" in url -> { // Search by name.
-                    document.select(searchAnimeSelector()).map { element ->
-                        searchAnimeFromElement(element)
-                    }
+            if ("/?s=" in url) { // Search by name.
+                document.select(searchAnimeSelector()).map { element ->
+                    searchAnimeFromElement(element)
                 }
-            }
-
-            else -> { // Search by some kind of filter, like genres or popularity.
+            } else { // Search by some kind of filter, like genres or popularity.
                 document.select(latestUpdatesSelector()).map { element ->
                     popularAnimeFromElement(element)
-                }
-            }
-        }
-
-                else -> { // Search by some kind of filter, like genres or popularity.
-                    document.select(latestUpdatesSelector()).map { element ->
-                        popularAnimeFromElement(element)
-                    }
                 }
             }
 
@@ -238,9 +228,9 @@ abstract class DooPlay(
         thumbnail_url = img.getImageUrl()
     }
 
-    protected open fun searchAnimeNextPageSelector() = latestUpdatesNextPageSelector()
+    override fun searchAnimeNextPageSelector() = latestUpdatesNextPageSelector()
 
-    protected open fun searchAnimeSelector() = "div.result-item div.image a"
+    override fun searchAnimeSelector() = "div.result-item div.image a"
 
     // =========================== Anime Details ============================
 
@@ -295,7 +285,7 @@ abstract class DooPlay(
         val seasonList = doc.select(seasonListSelector)
         val hasSeries = seasonList.isNotEmpty()
 
-        val requestUrl = response.request.url
+        val requestUrl = document.location().toHttpUrl()
         val forcedEpisodeMode = isForcedEpisodeMode(requestUrl)
         val fetchType =
             when {
@@ -312,11 +302,11 @@ abstract class DooPlay(
     }
 
     // =============================== Latest ===============================
-    protected open fun latestUpdatesNextPageSelector() = "div.resppages > a > span.fa-chevron-right"
+    override fun latestUpdatesNextPageSelector() = "div.resppages > a > span.fa-chevron-right"
 
-    protected open fun latestUpdatesSelector() = "div.content article > div.poster"
+    override fun latestUpdatesSelector() = "div.content article > div.poster"
 
-    protected open fun latestUpdatesFromElement(element: Element) = popularAnimeFromElement(element)
+    override fun latestUpdatesFromElement(element: Element) = popularAnimeFromElement(element)
 
     protected open val latestUpdatesPath =
         when (lang) {
@@ -464,9 +454,9 @@ abstract class DooPlay(
         displayName: String,
         private val vals: FilterItems,
     ) : AnimeFilter.Select<String>(
-            displayName,
-            vals.map { it.first }.toTypedArray(),
-        ) {
+        displayName,
+        vals.map { it.first }.toTypedArray(),
+    ) {
         fun toUriPart() = vals[state].second
     }
 
@@ -537,6 +527,33 @@ abstract class DooPlay(
 
     protected open fun String.toDate(): Long = runCatching { dateFormatter.parse(trim())?.time }
         .getOrNull() ?: 0L
+
+    /**
+     * Detect if content is a series or movie based on URL.
+     * Override this method to customize detection logic for specific sites.
+     */
+    protected open fun detectIsSeries(url: String): Boolean = !url.contains("/pelicula/", ignoreCase = true) &&
+        !url.contains("/movie/", ignoreCase = true) &&
+        !url.contains("/movies/", ignoreCase = true)
+
+    /**
+     * Check if the request URL indicates forced episode mode.
+     * This happens when viewing a specific season or episode page.
+     */
+    protected open fun isForcedEpisodeMode(url: okhttp3.HttpUrl): Boolean = url.queryParameter("season") != null ||
+        url.encodedPath.contains("/episodio/", ignoreCase = true) ||
+        url.encodedPath.contains("/episode/", ignoreCase = true)
+
+    /**
+     * Helper method to determine FetchType based on whether content is a series
+     * and user preference for splitting seasons.
+     */
+    protected open fun preferredFetchType(isSeries: Boolean): FetchType = if (isSeries && prefersSeasonFetch()) FetchType.Seasons else FetchType.Episodes
+
+    /**
+     * Check if user prefers to split seasons into separate entries.
+     */
+    protected open fun prefersSeasonFetch(): Boolean = preferences.splitSeasons
 }
 
 typealias FilterItems = Array<Pair<String, String>>

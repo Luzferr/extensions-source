@@ -2,6 +2,7 @@ package eu.kanade.tachiyomi.animeextension.es.azanimex
 
 import android.util.Log
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -16,6 +17,10 @@ import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
 class Azanimex : ParsedAnimeHttpSource() {
+
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
 
     override val name = "az-animex"
 
@@ -198,14 +203,16 @@ class Azanimex : ParsedAnimeHttpSource() {
 
     // ============================ Video URLS =============================
 
-    override fun videoListSelector() = throw Exception("Not used")
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
+        val videos = getVideoList(episode)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
 
-    override fun videoFromElement(element: Element) = throw Exception("Not used")
-    override fun videoUrlParse(document: Document): String = throw Exception("Not used")
+    override fun hosterListParse(response: Response): List<Hoster> = throw UnsupportedOperationException()
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    suspend fun getVideoList(episode: SEpisode): List<Video> {
         val videoUrl = episode.url
-        val video = Video(videoUrl, "az-animex", videoUrl)
+        val video = Video(videoUrl = videoUrl, videoTitle = "az-animex")
         return listOf(video)
     }
 

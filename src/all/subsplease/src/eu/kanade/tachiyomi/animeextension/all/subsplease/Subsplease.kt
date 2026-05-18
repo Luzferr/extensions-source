@@ -5,6 +5,7 @@ import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -45,7 +46,7 @@ class Subsplease :
         ignoreUnknownKeys = true
     }
 
-    override val supportsRelatedAnimes = false
+    val supportsRelatedAnimes = false
 
     override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/api/?f=schedule&tz=Europe/Berlin")
 
@@ -122,7 +123,14 @@ class Subsplease :
 
     // Video Extractor
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private fun videoListParse(response: Response): List<Video> {
         val responseString = response.body.string()
         val num = response.request.url.toString()
             .substringAfter("num=")
@@ -157,20 +165,20 @@ class Subsplease :
                 if (quality == null || videoUrl == null) return@inner null
 
                 when (preferences.debridProvider) {
-                    PREF_DEBRID_DEFAULT -> Video(videoUrl, quality, videoUrl)
+                    PREF_DEBRID_DEFAULT -> Video(videoUrl = videoUrl, videoTitle = quality)
 
                     else -> {
                         val debridUrl = debrid(videoUrl)
-                        Video(debridUrl, quality, debridUrl)
+                        Video(videoUrl = debridUrl, videoTitle = quality)
                     }
                 }
             }
         }?.flatten() ?: emptyList()
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.quality
-        return this.sortedByDescending { it.quality.contains(quality) }
+        return this.sortedByDescending { it.videoTitle.contains(quality) }
     }
 
     // Search

@@ -23,4 +23,5 @@ dependencies {
     implementation(project(':lib:fastreamextractor'))
     implementation(project(':lib:upstreamextractor'))
     implementation(project(':lib:universalextractor'))
+    implementation(project(':lib:vidhideextractor'))
 }

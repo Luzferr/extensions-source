@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.animeextension.all.javguru.extractors.MaxStreamExtrac
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -171,7 +172,7 @@ class JavGuru :
         throw Exception("Select at least one Filter")
     }
 
-    override fun relatedAnimeListParse(response: Response): List<SAnime> {
+    fun relatedAnimeListParse(response: Response): List<SAnime> {
         val document = response.asJsoup()
         return document.select("div.woo-sc-related-posts li").map { element ->
             SAnime.create().apply {
@@ -238,7 +239,14 @@ class JavGuru :
         },
     )
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
 
         val iframeData = document.selectFirst("script:containsData(iframe_url)")?.html()
@@ -330,11 +338,11 @@ class JavGuru :
         else -> emptyList()
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY, PREF_QUALITY_DEFAULT)!!
 
         return sortedWith(
-            compareBy { it.quality.contains(quality) },
+            compareBy { it.videoTitle.contains(quality, true) },
         ).reversed()
     }
 

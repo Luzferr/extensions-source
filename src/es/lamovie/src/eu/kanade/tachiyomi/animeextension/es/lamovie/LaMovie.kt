@@ -4,20 +4,20 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import aniyomi.lib.doodextractor.DoodExtractor
+import aniyomi.lib.filemoonextractor.FilemoonExtractor
+import aniyomi.lib.goodstramextractor.GoodStreamExtractor
+import aniyomi.lib.mp4uploadextractor.Mp4uploadExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
+import aniyomi.lib.vidhideextractor.VidHideExtractor
+import aniyomi.lib.voeextractor.VoeExtractor
+import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animeextension.es.lamovie.extractors.LaMovieEmbedExtractor
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.lib.doodextractor.DoodExtractor
-import eu.kanade.tachiyomi.lib.filemoonextractor.FilemoonExtractor
-import eu.kanade.tachiyomi.lib.goodstramextractor.GoodStreamExtractor
-import eu.kanade.tachiyomi.lib.mp4uploadextractor.Mp4uploadExtractor
-import eu.kanade.tachiyomi.lib.streamhidevidextractor.StreamHideVidExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
-import eu.kanade.tachiyomi.lib.voeextractor.VoeExtractor
-import eu.kanade.tachiyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.multisrc.dopeflix.DopeFlix
 import eu.kanade.tachiyomi.network.GET
 import kotlinx.serialization.KSerializer
@@ -42,21 +42,22 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 
-class LaMovie : DopeFlix(
-    "LaMovie",
-    "es",
-    arrayOf(
+class LaMovie :
+    DopeFlix(
+        "LaMovie",
+        "es",
+        arrayOf(
+            "la.movie",
+        ),
         "la.movie",
-    ),
-    "la.movie",
-) {
+    ) {
     override val id: Long = 5419283741928374105
 
     private val json by lazy { Json { ignoreUnknownKeys = true } }
     private val doodExtractor by lazy { DoodExtractor(client) }
     private val voeExtractor by lazy { VoeExtractor(client, headers) }
     private val mp4uploadExtractor by lazy { Mp4uploadExtractor(client) }
-    private val streamHideVidExtractor by lazy { StreamHideVidExtractor(client, headers) }
+    private val vidHideExtractor by lazy { VidHideExtractor(client, headers) }
     private val streamWishExtractor by lazy { StreamWishExtractor(client, headers) }
     private val yourUploadExtractor by lazy { YourUploadExtractor(client) }
     private val filemoonExtractor by lazy { FilemoonExtractor(client) }
@@ -217,29 +218,27 @@ class LaMovie : DopeFlix(
         return prioritizedEmbeds.flatMap(::resolveEmbedVideos)
     }
 
-    private fun resolveEmbedVideos(embed: EmbedItem): List<Video> {
-        return runCatching {
-            val prefix = buildString {
-                embed.language?.takeIf(String::isNotBlank)?.let { append("${it.uppercase(Locale.US)} | ") }
-                embed.quality?.takeIf(String::isNotBlank)?.let { append(" - $it") }
-            }
+    private fun resolveEmbedVideos(embed: EmbedItem): List<Video> = runCatching {
+        val prefix = buildString {
+            embed.language?.takeIf(String::isNotBlank)?.let { append("${it.uppercase(Locale.US)} | ") }
+            embed.quality?.takeIf(String::isNotBlank)?.let { append(" - $it") }
+        }
 
-            when (embed.serverKey()) {
-                SERVER_KEY_DOOD -> doodExtractor.videosFromUrl(embed.url, "$prefix - Doodstream")
-                SERVER_KEY_VOE -> voeExtractor.videosFromUrl(embed.url, "$prefix - Voe")
-                SERVER_KEY_MP4UPLOAD -> mp4uploadExtractor.videosFromUrl(embed.url, headers, "$prefix - Mp4upload")
-                SERVER_KEY_STREAMHIDE -> streamHideVidExtractor.videosFromUrl(embed.url) { quality -> "StreamHide - $quality - $prefix" }
-                SERVER_KEY_STREAMWISH -> streamWishExtractor.videosFromUrl(embed.url, prefix)
-                SERVER_KEY_YOURUPLOAD -> yourUploadExtractor.videoFromUrl(embed.url, headers, "$prefix - YourUpload")
-                SERVER_KEY_FILEMOON -> filemoonExtractor.videosFromUrl(embed.url, "$prefix - Filemoon")
-                SERVER_KEY_GOODSTREAM -> goodStreamExtractor.videosFromUrl(embed.url, "$prefix - GoodStream")
-                SERVER_KEY_LAMOVIE -> lamovieEmbedExtractor.videosFromUrl(embed.url, "$prefix - HLS")
-                else -> emptyList()
-            }
-        }.getOrElse { emptyList() }
-    }
+        when (embed.serverKey()) {
+            SERVER_KEY_DOOD -> doodExtractor.videosFromUrl(embed.url, "$prefix - Doodstream")
+            SERVER_KEY_VOE -> voeExtractor.videosFromUrl(embed.url, "$prefix - Voe")
+            SERVER_KEY_MP4UPLOAD -> mp4uploadExtractor.videosFromUrl(embed.url, headers, "$prefix - Mp4upload")
+            SERVER_KEY_STREAMHIDE -> kotlinx.coroutines.runBlocking { vidHideExtractor.videosFromUrl(embed.url) { quality -> "StreamHide - $quality - $prefix" } }
+            SERVER_KEY_STREAMWISH -> streamWishExtractor.videosFromUrl(embed.url, prefix)
+            SERVER_KEY_YOURUPLOAD -> yourUploadExtractor.videoFromUrl(embed.url, headers, "$prefix - YourUpload")
+            SERVER_KEY_FILEMOON -> filemoonExtractor.videosFromUrl(embed.url, "$prefix - Filemoon")
+            SERVER_KEY_GOODSTREAM -> goodStreamExtractor.videosFromUrl(embed.url, "$prefix - GoodStream")
+            SERVER_KEY_LAMOVIE -> lamovieEmbedExtractor.videosFromUrl(embed.url, "$prefix - HLS")
+            else -> emptyList()
+        }
+    }.getOrElse { emptyList() }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val preferredQuality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT) ?: PREF_QUALITY_DEFAULT
         val preferredQualityLower = preferredQuality.lowercase(Locale.US)
         val preferredQualityValue = QUALITY_REGEX.find(preferredQualityLower)?.groupValues?.get(1)?.toIntOrNull()
@@ -549,12 +548,11 @@ class LaMovie : DopeFlix(
         }
     }
 
-    private fun primaryImageHosts(): List<String> =
-        (STATIC_IMAGE_HOSTS + baseUrl)
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .map { it.trimEnd('/') }
-            .distinct()
+    private fun primaryImageHosts(): List<String> = (STATIC_IMAGE_HOSTS + baseUrl)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .map { it.trimEnd('/') }
+        .distinct()
 
     private fun buildAnimeUrl(post: PostDto): String {
         val slug = post.slug.ifBlank { post.id.toString() }
@@ -746,24 +744,20 @@ class LaMovie : DopeFlix(
         return normalizeListingType(stored)
     }
 
-    private fun normalizeListingType(raw: String): String {
-        return when (raw.lowercase(Locale.US)) {
-            "movie", "movies", "peliculas", "películas" -> "movies"
-            "tv-show", "tvshows", "tv shows", "series" -> "tvshows"
-            "anime", "animes" -> "animes"
-            else -> raw.ifBlank { DEFAULT_LISTING_TYPE }
-        }
+    private fun normalizeListingType(raw: String): String = when (raw.lowercase(Locale.US)) {
+        "movie", "movies", "peliculas", "películas" -> "movies"
+        "tv-show", "tvshows", "tv shows", "series" -> "tvshows"
+        "anime", "animes" -> "animes"
+        else -> raw.ifBlank { DEFAULT_LISTING_TYPE }
     }
 
-    private fun normalizeLanguagePreference(raw: String): String {
-        return when (raw.lowercase(Locale.US)) {
-            "any", "none", "sin preferencia", "todos" -> LANGUAGE_CODE_ANY
-            "latino", "latam", "es-lat", "esp-lat", "es_lat" -> LANGUAGE_CODE_LATINO
-            "castellano", "esp", "es-es", "españa", "esp-es", "spanish", "es" -> LANGUAGE_CODE_CASTELLANO
-            "sub", "subs", "subtitulado", "subtitulos", "vose" -> LANGUAGE_CODE_SUB
-            "english", "ingles", "inglés", "eng", "en" -> LANGUAGE_CODE_ENGLISH
-            else -> raw.ifBlank { LANGUAGE_CODE_ANY }
-        }
+    private fun normalizeLanguagePreference(raw: String): String = when (raw.lowercase(Locale.US)) {
+        "any", "none", "sin preferencia", "todos" -> LANGUAGE_CODE_ANY
+        "latino", "latam", "es-lat", "esp-lat", "es_lat" -> LANGUAGE_CODE_LATINO
+        "castellano", "esp", "es-es", "españa", "esp-es", "spanish", "es" -> LANGUAGE_CODE_CASTELLANO
+        "sub", "subs", "subtitulado", "subtitulos", "vose" -> LANGUAGE_CODE_SUB
+        "english", "ingles", "inglés", "eng", "en" -> LANGUAGE_CODE_ENGLISH
+        else -> raw.ifBlank { LANGUAGE_CODE_ANY }
     }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {

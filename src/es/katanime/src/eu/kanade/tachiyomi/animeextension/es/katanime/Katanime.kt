@@ -43,6 +43,8 @@ class Katanime :
     AnimeHttpSource(),
     ConfigurableAnimeSource {
 
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
     override val name = "Katanime"
 
     override val baseUrl = "https://katanime.net"
@@ -257,14 +259,14 @@ class Katanime :
         "lulu" to listOf("lulu"),
     )
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains(server, true) },
+                { it.videoTitle.contains(quality) },
+                { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }

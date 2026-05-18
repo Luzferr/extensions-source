@@ -20,6 +20,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -287,7 +288,7 @@ class StreamingCommunity(override val lang: String, private val showType: String
         return title.toSAnimeUpdate(intl)
     }
 
-    override fun relatedAnimeListParse(response: Response): List<SAnime> {
+    fun relatedAnimeListParse(response: Response): List<SAnime> {
         val sliders = json.decodeFromString<SingleShowResponse>(
             response.getData(),
         ).props.sliders
@@ -394,7 +395,30 @@ class StreamingCommunity(override val lang: String, private val showType: String
 
     // ============================ Video Links =============================
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
+    override fun hosterListRequest(episode: SEpisode): Request = when {
+        episode.url.startsWith("https://") -> GET(episode.url, headers)
+        else -> GET("$baseUrl/iframe/${episode.url}", headers)
+    }
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = runBlocking {
+            val requestUrl = response.request.url.toString()
+            when {
+                requestUrl.startsWith("https://") && requestUrl.contains("/embed/") -> vixCloudExtractor(requestUrl)
+                else -> {
+                    val iframeUrl = response.asJsoup()
+                        .selectFirst("iframe[src]")?.attr("abs:src")
+                        ?: error("Failed to extract iframe")
+                    vixCloudExtractor(iframeUrl)
+                }
+            }
+        }
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private suspend fun getVideoList(episode: SEpisode): List<Video> {
         val url = episode.url
         return when {
             url.startsWith("https://") -> vixCloudExtractor(url)
@@ -444,10 +468,6 @@ class StreamingCommunity(override val lang: String, private val showType: String
         return playlistUtils.extractFromHls(playlistUrl = masterPlUrl)
     }
 
-    override fun videoListRequest(episode: SEpisode): Request = throw Exception("Not used")
-
-    override fun videoListParse(response: Response): List<Video> = throw Exception("Not used")
-
     // ============================= Utilities ==============================
 
     private fun Response.getData(): String = if (headers["content-type"]?.contains("application/json") == true) {
@@ -459,13 +479,13 @@ class StreamingCommunity(override val lang: String, private val showType: String
             ?: error("Failed to extract data-page")
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
 
         return sortedWith(
             compareBy(
-                { it.quality.contains("${quality}p") },
-                { QUALITY_REGEX.find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains("${quality}p", true) || it.videoTitle.contains(quality, true) },
+                { QUALITY_REGEX.find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }

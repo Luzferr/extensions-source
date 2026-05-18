@@ -4,6 +4,11 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import aniyomi.lib.mp4uploadextractor.Mp4uploadExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
+import aniyomi.lib.universalextractor.UniversalExtractor
+import aniyomi.lib.voeextractor.VoeExtractor
+import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
@@ -12,15 +17,11 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
-import eu.kanade.tachiyomi.lib.mp4uploadextractor.Mp4uploadExtractor
 import eu.kanade.tachiyomi.lib.pixeldrainextractor.PixelDrainExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
-import eu.kanade.tachiyomi.lib.universalextractor.UniversalExtractor
-import eu.kanade.tachiyomi.lib.voeextractor.VoeExtractor
-import eu.kanade.tachiyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parallelCatchingFlatMapBlocking
+import kotlinx.coroutines.runBlocking
 import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
@@ -237,15 +238,15 @@ class AnimeAv1 :
                     languageTag = languageTag,
                     serverDisplay = serverDisplay,
                     hoster =
-                        Hoster(
-                            hosterName =
-                                listOfNotNull(
-                                    languageDisplay.takeIf { it.isNotBlank() },
-                                    serverDisplay,
-                                ).joinToString(" ")
-                                    .ifBlank { serverDisplay },
-                            videoList = sortedVideos,
-                        ),
+                    Hoster(
+                        hosterName =
+                        listOfNotNull(
+                            languageDisplay.takeIf { it.isNotBlank() },
+                            serverDisplay,
+                        ).joinToString(" ")
+                            .ifBlank { serverDisplay },
+                        videoList = sortedVideos,
+                    ),
                 )
             }
 
@@ -271,65 +272,64 @@ class AnimeAv1 :
         url: String,
         prefix: String = "",
         serverName: String? = "",
-    ): List<Video> =
-        runCatching {
-            val matched =
-                if (!serverName.isNullOrBlank()) {
-                    canonicalServerSlug(serverName)
-                } else {
-                    conventions
-                        .firstNotNullOfOrNull { (key, names) ->
-                            if (names.any { name -> url.contains(name, ignoreCase = true) }) {
-                                key
-                            } else {
-                                null
-                            }
-                        } ?: ""
-                }
-
-            val prefixBase = buildPrefix(prefix, displayServerName(matched))
-            val prefixWithSpace = prefixBase.withTrailingSpace()
-
-            when (matched) {
-                "voe" -> {
-                    voeExtractor.videosFromUrl(url, prefixWithSpace)
-                }
-
-                "pixeldrain" -> {
-                    pixelDrainExtractor.videosFromUrl(url, prefixWithSpace)
-                }
-
-                "mp4upload" -> {
-                    mp4uploadExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
-                }
-
-                "streamwish" -> {
-                    streamWishExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
-                }
-
-                "filelions" -> {
-                    streamWishExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
-                }
-
-                "yourupload" -> {
-                    yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = prefixWithSpace)
-                }
-
-                "playerzilla" -> {
-                    val m3u = url.replace("play/", "m3u8/")
-                    listOf(
-                        Video(
-                            videoTitle = buildVideoName(prefixBase, "HLS"),
-                            videoUrl = m3u,
-                        ),
-                    )
-                }
-
-                else -> {
-                    universalExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
-                }
+    ): List<Video> = runCatching {
+        val matched =
+            if (!serverName.isNullOrBlank()) {
+                canonicalServerSlug(serverName)
+            } else {
+                conventions
+                    .firstNotNullOfOrNull { (key, names) ->
+                        if (names.any { name -> url.contains(name, ignoreCase = true) }) {
+                            key
+                        } else {
+                            null
+                        }
+                    } ?: ""
             }
-        }.getOrNull() ?: emptyList()
+
+        val prefixBase = buildPrefix(prefix, displayServerName(matched))
+        val prefixWithSpace = prefixBase.withTrailingSpace()
+
+        when (matched) {
+            "voe" -> {
+                runBlocking { voeExtractor.videosFromUrl(url, prefixWithSpace) }
+            }
+
+            "pixeldrain" -> {
+                pixelDrainExtractor.videosFromUrl(url, prefixWithSpace)
+            }
+
+            "mp4upload" -> {
+                mp4uploadExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
+            }
+
+            "streamwish" -> {
+                runBlocking { streamWishExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) }) }
+            }
+
+            "filelions" -> {
+                runBlocking { streamWishExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) }) }
+            }
+
+            "yourupload" -> {
+                yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = prefixWithSpace)
+            }
+
+            "playerzilla" -> {
+                val m3u = url.replace("play/", "m3u8/")
+                listOf(
+                    Video(
+                        videoTitle = buildVideoName(prefixBase, "HLS"),
+                        videoUrl = m3u,
+                    ),
+                )
+            }
+
+            else -> {
+                universalExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
+            }
+        }
+    }.getOrNull() ?: emptyList()
 
     private val conventions =
         listOf(
@@ -400,32 +400,29 @@ class AnimeAv1 :
         val preferredLang = preferences.getString(PREF_LANG_KEY, PREF_LANG_DEFAULT) ?: PREF_LANG_DEFAULT
         val qualityRegex = Regex("""(\d+)p""", RegexOption.IGNORE_CASE)
 
-        fun Video.matchesLanguage(): Int =
-            if (preferredLang.isBlank()) {
-                0
-            } else if (videoTitle.contains(preferredLang, ignoreCase = true)) {
-                1
-            } else {
-                0
-            }
+        fun Video.matchesLanguage(): Int = if (preferredLang.isBlank()) {
+            0
+        } else if (videoTitle.contains(preferredLang, ignoreCase = true)) {
+            1
+        } else {
+            0
+        }
 
-        fun Video.matchesServer(): Int =
-            if (preferredServer.isBlank()) {
-                0
-            } else if (videoTitle.contains(preferredServer, ignoreCase = true)) {
-                1
-            } else {
-                0
-            }
+        fun Video.matchesServer(): Int = if (preferredServer.isBlank()) {
+            0
+        } else if (videoTitle.contains(preferredServer, ignoreCase = true)) {
+            1
+        } else {
+            0
+        }
 
         fun Video.matchesQuality(): Int = if (videoTitle.contains(preferredQuality, ignoreCase = true)) 1 else 0
 
-        fun Video.displayResolution(): Int =
-            resolution ?: qualityRegex
-                .find(videoTitle)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull() ?: 0
+        fun Video.displayResolution(): Int = resolution ?: qualityRegex
+            .find(videoTitle)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull() ?: 0
 
         return sortedWith(
             compareBy(
@@ -460,23 +457,21 @@ class AnimeAv1 :
     private fun buildPrefix(
         languageLabel: String,
         serverName: String,
-    ): String =
-        sequenceOf(languageLabel, serverName)
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .joinToString(" ")
+    ): String = sequenceOf(languageLabel, serverName)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString(" ")
 
     private fun String.withTrailingSpace(): String = if (isBlank()) "" else "$this "
 
     private fun buildVideoName(
         prefix: String,
         detail: String,
-    ): String =
-        when {
-            prefix.isBlank() -> detail.trim()
-            detail.isBlank() -> prefix.trim()
-            else -> "$prefix ${detail.trim()}"
-        }
+    ): String = when {
+        prefix.isBlank() -> detail.trim()
+        detail.isBlank() -> prefix.trim()
+        else -> "$prefix ${detail.trim()}"
+    }
 
     private fun languageLabel(languageTag: String): String = languageTag.takeIf { it.isNotBlank() }?.let { "[${it.uppercase()}]" } ?: ""
 
@@ -498,33 +493,30 @@ class AnimeAv1 :
         val serverDisplay: String,
         val hoster: Hoster,
     ) {
-        fun matchesLanguage(preferred: String): Int =
-            if (preferred.isBlank()) {
-                0
-            } else if (languageTag.equals(preferred, ignoreCase = true)) {
-                1
-            } else {
-                0
-            }
+        fun matchesLanguage(preferred: String): Int = if (preferred.isBlank()) {
+            0
+        } else if (languageTag.equals(preferred, ignoreCase = true)) {
+            1
+        } else {
+            0
+        }
 
-        fun matchesServer(preferred: String): Int =
-            if (preferred.isBlank()) {
-                0
-            } else if (serverDisplay.equals(preferred, ignoreCase = true)) {
-                1
-            } else {
-                0
-            }
+        fun matchesServer(preferred: String): Int = if (preferred.isBlank()) {
+            0
+        } else if (serverDisplay.equals(preferred, ignoreCase = true)) {
+            1
+        } else {
+            0
+        }
     }
 
     // Funciones auxiliares simplificadas
-    private fun String.toAbsoluteUrl(): String =
-        if (startsWith("http", true)) {
-            this
-        } else {
-            val separator = if (startsWith("/")) "" else "/"
-            "$baseUrl$separator$this"
-        }
+    private fun String.toAbsoluteUrl(): String = if (startsWith("http", true)) {
+        this
+    } else {
+        val separator = if (startsWith("/")) "" else "/"
+        "$baseUrl$separator$this"
+    }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         ListPreference(screen.context)

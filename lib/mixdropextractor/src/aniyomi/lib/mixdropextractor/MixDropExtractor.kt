@@ -51,7 +51,7 @@ class MixDropExtractor(private val client: OkHttpClient) {
             if (lang.isNotBlank()) append("($lang)")
         }
 
-        return listOf(Video(url = videoUrl, quality = quality, videoUrl = videoUrl, headers = headers, subtitleTracks = subs + externalSubs, audioTracks = emptyList()))
+        return listOf(Video(videoUrl = videoUrl, videoTitle = quality, headers = headers, subtitleTracks = subs + externalSubs, audioTracks = emptyList()))
     }
 
     fun videosFromUrl(

@@ -15,25 +15,25 @@ import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
+import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.utils.addEditTextPreference
 import keiyoushi.utils.delegate
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parallelCatchingFlatMapBlocking
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Headers
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import uy.kohesive.injekt.injectLazy
 
 class AnimeFlv :
-    ParsedAnimeHttpSource(),
+    AnimeHttpSource(),
     ConfigurableAnimeSource {
 
     override val name = "AnimeFLV"
@@ -77,7 +77,7 @@ class AnimeFlv :
 
     override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/browse?order=rating&page=$page", headers)
 
-    override fun popularAnimeFromElement(element: Element): SAnime {
+    private fun animeFromElement(element: Element): SAnime {
         val anime = SAnime.create()
         anime.setUrlWithoutDomain(element.select("div.Description a.Button").attr("abs:href"))
         anime.title = element.select("a h3").text()
@@ -90,6 +90,13 @@ class AnimeFlv :
         return anime
     }
 
+    override fun popularAnimeParse(response: Response): AnimesPage {
+        val document = response.asJsoup()
+        val elements = document.select("ul.ListAnimes li article.Anime")
+        val hasNextPage = document.select("ul.pagination li.page-item:last-child a").any()
+        return AnimesPage(elements.map(::animeFromElement), hasNextPage)
+    }
+
     override fun episodeListParse(response: Response): List<SEpisode> {
         val document = response.asJsoup()
         val episodeList = mutableListOf<SEpisode>()
@@ -98,7 +105,7 @@ class AnimeFlv :
                 val scriptData = script.data()
                 val animeInfo = scriptData.substringAfter("var anime_info = [").substringBefore("];")
                 val arrInfo = json.decodeFromString<List<String>>("[$animeInfo]")
-
+                val animeId = arrInfo[0].replace("\"", "")
                 val animeUri = arrInfo[2].replace("\"", "")
                 val episodes = script.data().substringAfter("var episodes = [").substringBefore("];").trim()
                 val arrEpisodes = episodes.split("],[")
@@ -121,16 +128,14 @@ class AnimeFlv :
 
     override fun seasonListParse(response: Response): List<SAnime> = emptyList()
 
-    override fun episodeFromElement(element: Element) = throw UnsupportedOperationException()
-
     /*--------------------------------Video extractors------------------------------------*/
-    private val streamTapeExtractor by lazy { StreamTapeExtractor(client) }
-    private val okruExtractor by lazy { OkruExtractor(client) }
-    private val yourUploadExtractor by lazy { YourUploadExtractor(client) }
-    private val streamWishExtractor by lazy { StreamWishExtractor(client, headers) }
-    private val universalExtractor by lazy { UniversalExtractor(client) }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         val jsonString = document.selectFirst("script:containsData(var videos = {)")?.data() ?: return emptyList()
         val responseString = jsonString.substringAfter("var videos =").substringBefore(";").trim()
@@ -139,16 +144,9 @@ class AnimeFlv :
                 "Stape" -> streamTapeExtractor.videosFromUrl(it.code)
                 "Okru" -> okruExtractor.videosFromUrl(it.code)
                 "YourUpload" -> yourUploadExtractor.videoFromUrl(it.code, headers = headers)
-                "SW" -> streamWishExtractor.videosFromUrl(it.code, videoNameGen = { "StreamWish:$it" })
+                "SW" -> runBlocking { streamWishExtractor.videosFromUrl(it.code, videoNameGen = { "StreamWish:$it" }) }
                 else -> universalExtractor.videosFromUrl(it.code, headers)
             }
-        }
-
-        return hosterMap.map { (serverName, videos) ->
-            Hoster(
-                hosterName = serverName,
-                videoList = videos.sortVideos(),
-            )
         }
     }
 
@@ -188,11 +186,16 @@ class AnimeFlv :
 
     override fun latestUpdatesRequest(page: Int) = GET(baseUrl, headers)
 
-    override fun latestUpdatesNextPageSelector() = null
+    override fun latestUpdatesParse(response: Response): AnimesPage {
+        val document = response.asJsoup()
+        val elements = document.select(latestUpdatesSelector())
+        val animeList = elements.map(::latestUpdatesFromElement)
+        return AnimesPage(animeList, false)
+    }
 
-    override fun latestUpdatesSelector() = "div.Container ul.ListEpisodios li a.fa-play"
+    private fun latestUpdatesSelector() = "div.Container ul.ListEpisodios li a.fa-play"
 
-    override fun latestUpdatesFromElement(element: Element): SAnime {
+    private fun latestUpdatesFromElement(element: Element): SAnime {
         val anime = SAnime.create()
         anime.setUrlWithoutDomain(element.select("a").attr("abs:href").replace("/ver/", "/anime/").substringBeforeLast("-"))
         anime.title = element.select("strong.Title").text()
@@ -200,7 +203,7 @@ class AnimeFlv :
         return anime
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         return this

@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -247,7 +248,16 @@ class LegionAnime :
         )
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    fun videoListParse(response: Response): List<Video> {
         val jsonResponse = json.decodeFromString<JsonObject>(response.asJsoup().body().text())
         val responseArray = jsonResponse["response"]!!.jsonObject
         val players = responseArray["players"]!!.jsonArray
@@ -271,16 +281,16 @@ class LegionAnime :
         url.contains("jkanime") -> listOfNotNull(JkanimeExtractor(client).getDesuFromUrl(url))
         url.contains("/stream/amz.php?") -> {
             val videoUrl = JkanimeExtractor(client).amazonExtractor(url).takeIf { it.isNotBlank() } ?: return emptyList()
-            listOf(Video(videoUrl, server, videoUrl))
+            listOf(Video(videoUrl = videoUrl, videoTitle = server))
         }
         url.contains("yourupload") -> YourUploadExtractor(client).videoFromUrl(url, headers)
         url.contains("mp4upload") -> Mp4uploadExtractor(client).videosFromUrl(url, headers)
         url.contains("dood") -> listOfNotNull(DoodExtractor(client).videoFromUrl(url))
         url.contains("ok.ru") -> OkruExtractor(client).videosFromUrl(url)
         url.startsWith("http") && url.contains("flvvideo") && (url.endsWith(".m3u8") || url.endsWith(".mp4")) ->
-            listOf(Video(url, "VideoFLV", url))
+            listOf(Video(videoUrl = url, videoTitle = "VideoFLV"))
         url.startsWith("http") && url.contains("cdnlat4animecen") && (url.endsWith(".class") || url.endsWith(".m3u8") || url.endsWith(".mp4")) ->
-            listOf(Video(url, "AnimeCen", url))
+            listOf(Video(videoUrl = url, videoTitle = "AnimeCen"))
         url.contains("uqload") -> UqloadExtractor(client).videosFromUrl(url)
         else -> emptyList()
     }
@@ -361,7 +371,7 @@ class LegionAnime :
     private fun List<Video>.sortIfContains(item: String): List<Video> {
         val newList = mutableListOf<Video>()
         for (video in this) {
-            if (item in video.quality) {
+            if (item in video.videoTitle) {
                 newList.add(0, video)
             } else {
                 newList.add(video)
@@ -370,7 +380,7 @@ class LegionAnime :
         return newList
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString("preferred_quality", "desu")!!
         return sortIfContains(quality)
     }
@@ -390,12 +400,6 @@ class LegionAnime :
     override fun popularAnimeFromElement(element: Element): SAnime = throw UnsupportedOperationException()
 
     override fun popularAnimeNextPageSelector(): String = throw UnsupportedOperationException()
-
-    override fun videoFromElement(element: Element): Video = throw UnsupportedOperationException()
-
-    override fun videoListSelector(): String = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document): String = throw UnsupportedOperationException()
 
     override fun searchAnimeSelector(): String = throw UnsupportedOperationException()
 

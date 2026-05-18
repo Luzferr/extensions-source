@@ -4,6 +4,7 @@ import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -171,11 +172,17 @@ class AnimeWorldIndia(
     }
 
     // ============================ Video Links =============================
-    override fun videoFromElement(element: Element): Video = throw UnsupportedOperationException()
+    override fun seasonListSelector(): String = throw UnsupportedOperationException("Not used")
 
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException("Not used")
 
-    override fun videoListSelector() = throw UnsupportedOperationException()
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val tempHoster = Hoster(name)
+        val videos = videoListParse(response, tempHoster)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    override fun videoListRequest(hoster: Hoster): Request = throw UnsupportedOperationException("Not used")
 
     @Serializable
     private data class PlayerDto(
@@ -187,7 +194,7 @@ class AnimeWorldIndia(
 
     private val mystreamExtractor by lazy { MyStreamExtractor(client, headers) }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun videoListParse(response: Response, hoster: Hoster): List<Video> {
         val body = response.body.string()
         val documentTrimmed = body
             .substringAfterLast("\"players\":")
@@ -208,11 +215,11 @@ class AnimeWorldIndia(
         }
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
 
         return sortedWith(
-            compareBy { it.quality.contains(quality) },
+            compareBy { it.videoTitle.contains(quality) },
         ).reversed()
     }
 

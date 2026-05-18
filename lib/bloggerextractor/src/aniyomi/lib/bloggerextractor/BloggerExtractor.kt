@@ -45,7 +45,7 @@ class BloggerExtractor(private val client: OkHttpClient) {
                     "37" -> "1080p"
                     else -> "Unknown"
                 }
-                Video(videoUrl, "Blogger - $quality $suffix".trimEnd(), videoUrl, headers)
+                Video(videoUrl = videoUrl, videoTitle = "Blogger - $quality $suffix".trimEnd(), headers = headers)
             }
     }
 
@@ -61,14 +61,14 @@ class BloggerExtractor(private val client: OkHttpClient) {
     ): List<Video> {
         val token = url.toHttpUrl().queryParameter("token")
 
-        val f_sid = body.substringAfter("FdrFJe\":\"").substringBefore("\"")
+        val fSid = body.substringAfter("FdrFJe\":\"").substringBefore("\"")
         val bl = body.substringAfter("cfb2h\":\"").substringBefore("\"")
         val reqid = ((System.currentTimeMillis() / 1000L) % 86400L).toString() // Number of seconds of the day
 
         val rpcUrl =
-            "https://www.blogger.com/_/BloggerVideoPlayerUi/data/batchexecute?rpcids=WcwnYd&source-path=%2Fvideo.g&f.sid=${f_sid}&bl=${bl}&hl=en-US&_reqid=${reqid}&rt=c"
+            "https://www.blogger.com/_/BloggerVideoPlayerUi/data/batchexecute?rpcids=WcwnYd&source-path=%2Fvideo.g&f.sid=$fSid&bl=$bl&hl=en-US&_reqid=$reqid&rt=c"
         val rpcBody =
-            "f.req=%5B%5B%5B%22WcwnYd%22%2C%22%5B%5C%22${token}%5C%22%2C%5C%22%5C%22%2C0%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&".toRequestBody()
+            "f.req=%5B%5B%5B%22WcwnYd%22%2C%22%5B%5C%22$token%5C%22%2C%5C%22%5C%22%2C0%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&".toRequestBody()
         val rpcHeaders = Headers.headersOf(
             "accept",
             "*/*",
@@ -120,7 +120,7 @@ class BloggerExtractor(private val client: OkHttpClient) {
                     "37" -> "1080p"
                     else -> "Unknown"
                 }
-                Video(videoUrl, "Blogger - $quality $suffix".trimEnd(), videoUrl, headers)
+                Video(videoUrl = videoUrl, videoTitle = "Blogger - $quality $suffix".trimEnd(), headers = headers)
             }
     }
 }

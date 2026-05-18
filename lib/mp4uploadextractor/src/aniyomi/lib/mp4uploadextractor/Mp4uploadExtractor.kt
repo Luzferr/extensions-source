@@ -47,7 +47,7 @@ class Mp4uploadExtractor(private val client: OkHttpClient) {
             .set("Referer", REFERER)
             .build()
 
-        return listOf(Video(url = finalUrl, quality = quality, videoUrl = finalUrl, headers = headersForVideo, subtitleTracks = emptyList(), audioTracks = emptyList()))
+        return listOf(Video(videoUrl = finalUrl, videoTitle = quality, headers = headersForVideo, subtitleTracks = emptyList(), audioTracks = emptyList()))
     }
 
     companion object {

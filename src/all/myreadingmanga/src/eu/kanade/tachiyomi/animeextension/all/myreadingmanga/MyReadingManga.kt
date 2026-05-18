@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -336,14 +337,21 @@ open class MyReadingManga(override val lang: String, private val siteLang: Strin
      * ========== Building videos from element ==========
      */
 
-    override fun videoListSelector(): String = "div.video-container-ads video source"
+    override fun seasonListSelector() = throw UnsupportedOperationException()
 
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
+    override fun seasonFromElement(element: Element) = throw UnsupportedOperationException()
 
-    override fun videoUrlParse(document: Document): String = document.selectFirst(videoListSelector())?.attr("src")
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private fun videoListSelector(): String = "div.video-container-ads video source"
+
+    private fun videoUrlParse(document: Document): String = document.selectFirst(videoListSelector())?.attr("src")
         ?: throw Exception("No video URL found")
 
-    override fun videoListParse(response: Response): List<Video> {
+    private fun videoListParse(response: Response): List<Video> {
         if (!response.isSuccessful) {
             if (response.code == 403) {
                 throw Exception("Download the episode before watching (Error 403)")
@@ -363,7 +371,13 @@ open class MyReadingManga(override val lang: String, private val siteLang: Strin
             set("Cookie", cookies)
         }.build()
 
-        return listOf(Video(videoUrl, "Default", videoUrl, customHeaders))
+        return listOf(
+            Video(
+                videoUrl = videoUrl,
+                videoTitle = "Default",
+                headers = customHeaders,
+            ),
+        )
     }
 
     /*

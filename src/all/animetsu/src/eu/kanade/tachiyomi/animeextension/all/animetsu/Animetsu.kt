@@ -6,6 +6,7 @@ import aniyomi.lib.playlistutils.PlaylistUtils
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
@@ -154,7 +155,7 @@ class Animetsu :
 
     // ============================== Related ===============================
 
-    override fun relatedAnimeListParse(response: Response): List<SAnime> {
+    fun relatedAnimeListParse(response: Response): List<SAnime> {
         val dto = response.parseAs<AnimetsuAnimeDto>()
 
         return buildList {
@@ -213,7 +214,24 @@ class Animetsu :
     override fun episodeListParse(response: Response): List<SEpisode> = throw UnsupportedOperationException()
 
     // ============================ Video Links =============================
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
+    override fun hosterListRequest(episode: SEpisode): Request = throw UnsupportedOperationException("Not used")
+
+    override fun hosterListParse(response: Response): List<Hoster> = throw UnsupportedOperationException("Not used")
+
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
+        val videos = getVideoList(episode)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    override suspend fun getVideoList(hoster: Hoster): List<Video> = hoster.videoList.orEmpty()
+
+    override fun videoListRequest(hoster: Hoster): Request = throw UnsupportedOperationException("Not used")
+
+    override fun videoListParse(response: Response, hoster: Hoster): List<Video> = throw UnsupportedOperationException("Not used")
+
+    private suspend fun getVideoList(episode: SEpisode): List<Video> {
         val parts = episode.url.split("/")
         val animeId = parts[0]
         val epNum = parts[1]
@@ -263,20 +281,18 @@ class Animetsu :
                     when {
                         source.type?.contains("mp4") == true ->
                             Video(
-                                fullUrl,
-                                "${server.id.uppercase()}: ${source.quality} ($audioLabel)$subLabel",
-                                fullUrl,
-                                apiHeaders(watchReferer),
-                                subtitleTracks,
+                                videoUrl = fullUrl,
+                                videoTitle = "${server.id.uppercase()}: ${source.quality} ($audioLabel)$subLabel",
+                                headers = apiHeaders(watchReferer),
+                                subtitleTracks = subtitleTracks,
                             ).let(::listOf)
                         source.type?.contains("mpegurl") == true ->
                             if (source.oldHls) {
                                 Video(
-                                    fullUrl,
-                                    "${server.id.uppercase()}: ${source.quality} ($audioLabel)$subLabel",
-                                    fullUrl,
-                                    apiHeaders(watchReferer),
-                                    subtitleTracks,
+                                    videoUrl = fullUrl,
+                                    videoTitle = "${server.id.uppercase()}: ${source.quality} ($audioLabel)$subLabel",
+                                    headers = apiHeaders(watchReferer),
+                                    subtitleTracks = subtitleTracks,
                                 ).let(::listOf)
                             } else {
                                 playlistUtils.extractFromHls(
@@ -298,20 +314,17 @@ class Animetsu :
         }
     }
 
-    override fun videoListRequest(episode: SEpisode): Request = throw UnsupportedOperationException()
-    override fun videoListParse(response: Response): List<Video> = throw UnsupportedOperationException()
-
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferredQuality
         val server = preferredServer
         val type = preferredAudioType
         val qualitiesList = PREF_QUALITY_ENTRIES.reversed()
 
         return sortedWith(
-            compareByDescending<Video> { it.quality.contains(quality) }
-                .thenByDescending { video -> qualitiesList.indexOfLast { video.quality.contains(it) } }
-                .thenByDescending { it.quality.contains(server, true) }
-                .thenByDescending { it.quality.contains(type, true) },
+            compareByDescending<Video> { it.videoTitle.contains(quality) }
+                .thenByDescending { video -> qualitiesList.indexOfLast { video.videoTitle.contains(it) } }
+                .thenByDescending { it.videoTitle.contains(server, true) }
+                .thenByDescending { it.videoTitle.contains(type, true) },
         )
     }
 

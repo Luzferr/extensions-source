@@ -203,11 +203,10 @@ class Hackstoremx :
     // POPULAR ANIME
     // ================================================================================================
 
-    override fun popularAnimeRequest(page: Int): Request =
-        GET(
-            "$baseUrl/wp-api/v1/listing/movies?page=$page&postsPerPage=12&orderBy=latest&order=desc&postType=movies&filter=%5B%5D",
-            headers,
-        )
+    override fun popularAnimeRequest(page: Int): Request = GET(
+        "$baseUrl/wp-api/v1/listing/movies?page=$page&postsPerPage=12&orderBy=latest&order=desc&postType=movies&filter=%5B%5D",
+        headers,
+    )
 
     override fun popularAnimeParse(response: Response): AnimesPage {
         val root = parseJsonObject(response.body.string()) ?: return AnimesPage(emptyList(), false)
@@ -234,11 +233,10 @@ class Hackstoremx :
     // LATEST UPDATES
     // ================================================================================================
 
-    override fun latestUpdatesRequest(page: Int): Request =
-        GET(
-            "$baseUrl/wp-api/v1/listing/tvshows?page=$page&postsPerPage=12&orderBy=latest&order=desc&postType=tvshows&filter=%5B%5D",
-            headers,
-        )
+    override fun latestUpdatesRequest(page: Int): Request = GET(
+        "$baseUrl/wp-api/v1/listing/tvshows?page=$page&postsPerPage=12&orderBy=latest&order=desc&postType=tvshows&filter=%5B%5D",
+        headers,
+    )
 
     override fun latestUpdatesParse(response: Response): AnimesPage {
         val root = parseJsonObject(response.body.string()) ?: return AnimesPage(emptyList(), false)
@@ -269,14 +267,13 @@ class Hackstoremx :
         page: Int,
         query: String,
         filters: AnimeFilterList,
-    ): Request =
-        if (query.isNotBlank()) {
-            // Use the site's search API endpoint which returns JSON: /wp-api/v1/search
-            val encoded = java.net.URLEncoder.encode(query, "UTF-8")
-            GET("$baseUrl/wp-api/v1/search?postType=any&q=$encoded&postsPerPage=12&page=$page", headers)
-        } else {
-            popularAnimeRequest(page)
-        }
+    ): Request = if (query.isNotBlank()) {
+        // Use the site's search API endpoint which returns JSON: /wp-api/v1/search
+        val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+        GET("$baseUrl/wp-api/v1/search?postType=any&q=$encoded&postsPerPage=12&page=$page", headers)
+    } else {
+        popularAnimeRequest(page)
+    }
 
     override fun searchAnimeParse(response: Response): AnimesPage {
         // Try parse as JSON listing API first
@@ -664,14 +661,13 @@ class Hackstoremx :
 
         fun Video.matchesQuality() = if (videoTitle.contains(preferredQuality)) 1 else 0
 
-        fun Video.displayResolution(): Int =
-            resolution
-                ?: QUALITY_REGEX
-                    .find(videoTitle)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.toIntOrNull()
-                ?: 0
+        fun Video.displayResolution(): Int = resolution
+            ?: QUALITY_REGEX
+                .find(videoTitle)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+            ?: 0
 
         return sortedWith(
             compareBy(
@@ -687,11 +683,10 @@ class Hackstoremx :
     // FILTERS
     // ================================================================================================
 
-    override fun getFilterList(): AnimeFilterList =
-        AnimeFilterList(
-            AnimeFilter.Header("La busqueda por texto ignora el filtro"),
-            GenreFilter(),
-        )
+    override fun getFilterList(): AnimeFilterList = AnimeFilterList(
+        AnimeFilter.Header("La busqueda por texto ignora el filtro"),
+        GenreFilter(),
+    )
 
     private class GenreFilter :
         UriPartFilter(
@@ -1538,46 +1533,45 @@ class Hackstoremx :
     private fun extractAmazonVideos(
         url: String,
         prefixBase: String,
-    ): List<Video> =
-        runCatching {
-            val body = client.newCall(GET(url)).execute().asJsoup()
-            if (body.select("script:containsData(var shareId)").toString().isNotBlank()) {
-                val shareId =
-                    body
-                        .selectFirst("script:containsData(var shareId)")!!
-                        .data()
-                        .substringAfter("shareId = \"")
-                        .substringBefore("\"")
+    ): List<Video> = runCatching {
+        val body = client.newCall(GET(url)).execute().asJsoup()
+        if (body.select("script:containsData(var shareId)").toString().isNotBlank()) {
+            val shareId =
+                body
+                    .selectFirst("script:containsData(var shareId)")!!
+                    .data()
+                    .substringAfter("shareId = \"")
+                    .substringBefore("\"")
 
-                val amazonApiJson =
-                    client
-                        .newCall(
-                            GET("https://www.amazon.com/drive/v1/shares/$shareId?resourceVersion=V2&ContentType=JSON&asset=ALL"),
-                        ).execute()
-                        .asJsoup()
+            val amazonApiJson =
+                client
+                    .newCall(
+                        GET("https://www.amazon.com/drive/v1/shares/$shareId?resourceVersion=V2&ContentType=JSON&asset=ALL"),
+                    ).execute()
+                    .asJsoup()
 
-                val epId = amazonApiJson.toString().substringAfter("\"id\":\"").substringBefore("\"")
-                val amazonApi =
-                    client
-                        .newCall(
-                            GET(
-                                "https://www.amazon.com/drive/v1/nodes/$epId/children?resourceVersion=V2&ContentType=JSON&limit=200&sort=%5B%22kind+DESC%22%2C+%22modifiedDate+DESC%22%5D&asset=ALL&tempLink=true&shareId=$shareId",
-                            ),
-                        ).execute()
-                        .asJsoup()
+            val epId = amazonApiJson.toString().substringAfter("\"id\":\"").substringBefore("\"")
+            val amazonApi =
+                client
+                    .newCall(
+                        GET(
+                            "https://www.amazon.com/drive/v1/nodes/$epId/children?resourceVersion=V2&ContentType=JSON&limit=200&sort=%5B%22kind+DESC%22%2C+%22modifiedDate+DESC%22%5D&asset=ALL&tempLink=true&shareId=$shareId",
+                        ),
+                    ).execute()
+                    .asJsoup()
 
-                val videoUrl =
-                    amazonApi
-                        .toString()
-                        .substringAfter("\"FOLDER\":")
-                        .substringAfter("tempLink:\"")
-                        .substringBefore("\"")
+            val videoUrl =
+                amazonApi
+                    .toString()
+                    .substringAfter("\"FOLDER\":")
+                    .substringAfter("tempLink:\"")
+                    .substringBefore("\"")
 
-                listOf(Video(videoUrl = videoUrl, videoTitle = buildVideoName(prefixBase, "Amazon")))
-            } else {
-                emptyList()
-            }
-        }.getOrNull() ?: emptyList()
+            listOf(Video(videoUrl = videoUrl, videoTitle = buildVideoName(prefixBase, "Amazon")))
+        } else {
+            emptyList()
+        }
+    }.getOrNull() ?: emptyList()
 
     // ================================================================================================
     // HELPER METHODS - SERVER DETECTION
@@ -1926,13 +1920,12 @@ class Hackstoremx :
         }
     }
 
-    private fun String.toAbsoluteUrl(): String =
-        if (startsWith("http", true)) {
-            this
-        } else {
-            val separator = if (startsWith("/")) "" else "/"
-            "$baseUrl$separator$this"
-        }
+    private fun String.toAbsoluteUrl(): String = if (startsWith("http", true)) {
+        this
+    } else {
+        val separator = if (startsWith("/")) "" else "/"
+        "$baseUrl$separator$this"
+    }
 
     private fun buildSeasonUrl(
         sourceBaseUrl: String,
@@ -1982,30 +1975,27 @@ class Hackstoremx :
     private fun buildPrefix(
         languageTag: String,
         serverName: String,
-    ): String =
-        sequenceOf(languageTag, serverName)
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .joinToString(" ")
+    ): String = sequenceOf(languageTag, serverName)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString(" ")
 
     private fun String.withTrailingSpace(): String = if (isBlank()) "" else "$this "
 
     private fun buildVideoName(
         prefix: String,
         detail: String,
-    ): String =
-        when {
-            prefix.isBlank() -> detail.trim()
-            detail.isBlank() -> prefix.trim()
-            else -> "$prefix ${detail.trim()}"
-        }
+    ): String = when {
+        prefix.isBlank() -> detail.trim()
+        detail.isBlank() -> prefix.trim()
+        else -> "$prefix ${detail.trim()}"
+    }
 
-    private fun String.optimizeImageUrl(): String =
-        if (contains("/original/", ignoreCase = true)) {
-            replace("/original/", "/w400/")
-        } else {
-            this
-        }
+    private fun String.optimizeImageUrl(): String = if (contains("/original/", ignoreCase = true)) {
+        replace("/original/", "/w400/")
+    } else {
+        this
+    }
 
     private fun String.toDate(): Long = runCatching { DATE_FORMATTER.parse(trim())?.time }.getOrNull() ?: 0L
 
@@ -2060,10 +2050,9 @@ class Hackstoremx :
 
     private fun JsonArray.toObjectList(): List<JsonObject> = mapNotNull { it.jsonObjectOrNull() }
 
-    private fun parseJsonObject(body: String?): JsonObject? =
-        body
-            ?.takeIf { it.isNotBlank() }
-            ?.let { runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull() }
+    private fun parseJsonObject(body: String?): JsonObject? = body
+        ?.takeIf { it.isNotBlank() }
+        ?.let { runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull() }
 
     private fun fetchApiJson(url: String): JsonObject? {
         if (apiJsonCache.containsKey(url)) return apiJsonCache[url]
@@ -2135,25 +2124,24 @@ class Hackstoremx :
         items: List<JsonObject>,
         urlKeys: Array<String>,
         serverKeys: Array<String>,
-    ): List<HosterEntry> =
-        items.parallelCatchingFlatMapBlocking { item ->
-            val url = item.firstString(*urlKeys) ?: return@parallelCatchingFlatMapBlocking emptyList()
-            val serverSlug = item.firstString(*serverKeys).orEmpty()
-            val languageTag = item.firstString("lang", "language").orEmpty()
-            val videos = serverVideoResolver(url, languageTag, serverSlug)
+    ): List<HosterEntry> = items.parallelCatchingFlatMapBlocking { item ->
+        val url = item.firstString(*urlKeys) ?: return@parallelCatchingFlatMapBlocking emptyList()
+        val serverSlug = item.firstString(*serverKeys).orEmpty()
+        val languageTag = item.firstString("lang", "language").orEmpty()
+        val videos = serverVideoResolver(url, languageTag, serverSlug)
 
-            if (videos.isEmpty()) {
-                emptyList()
-            } else {
-                listOf(
-                    HosterEntry(
-                        languageTag = languageTag,
-                        serverSlug = serverSlug.ifBlank { url },
-                        videos = videos,
-                    ),
-                )
-            }
+        if (videos.isEmpty()) {
+            emptyList()
+        } else {
+            listOf(
+                HosterEntry(
+                    languageTag = languageTag,
+                    serverSlug = serverSlug.ifBlank { url },
+                    videos = videos,
+                ),
+            )
         }
+    }
 
     private fun buildHosters(
         entries: List<HosterEntry>,
@@ -2183,12 +2171,11 @@ class Hackstoremx :
         if (DEBUG_LOGS) Log.d(TAG, message())
     }
 
-    private fun <K, V> lruCache(maxSize: Int): MutableMap<K, V> =
-        Collections.synchronizedMap(
-            object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {
-                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean = size > maxSize
-            },
-        )
+    private fun <K, V> lruCache(maxSize: Int): MutableMap<K, V> = Collections.synchronizedMap(
+        object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean = size > maxSize
+        },
+    )
 
     // ================================================================================================
     // HELPER METHODS - PREFERENCES
@@ -2196,8 +2183,7 @@ class Hackstoremx :
 
     private fun prefersSeasonFetch(): Boolean = preferences.splitSeasons
 
-    private fun preferredFetchType(isSeries: Boolean): FetchType =
-        if (isSeries && prefersSeasonFetch()) FetchType.Seasons else FetchType.Episodes
+    private fun preferredFetchType(isSeries: Boolean): FetchType = if (isSeries && prefersSeasonFetch()) FetchType.Seasons else FetchType.Episodes
 }
 
 // ================================================================================================

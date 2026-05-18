@@ -20,6 +20,7 @@ import aniyomi.lib.vidhideextractor.VidHideExtractor
 import aniyomi.lib.voeextractor.VoeExtractor
 import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
+import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
@@ -27,7 +28,6 @@ import eu.kanade.tachiyomi.network.awaitSuccess
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.useAsJsoup
 import kotlinx.serialization.json.Json
-import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import uy.kohesive.injekt.injectLazy
 import kotlin.getValue
@@ -35,6 +35,10 @@ import kotlin.getValue
 abstract class PelisPlus :
     ParsedAnimeHttpSource(),
     ConfigurableAnimeSource {
+
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
 
     override val lang = "es"
 
@@ -87,7 +91,7 @@ abstract class PelisPlus :
                     client.newCall(GET("https://www.amazon.com/drive/v1/nodes/$epId/children?resourceVersion=V2&ContentType=JSON&limit=200&sort=%5B%22kind+DESC%22%2C+%22modifiedDate+DESC%22%5D&asset=ALL&tempLink=true&shareId=$shareId"))
                         .awaitSuccess().useAsJsoup()
                 val videoUrl = amazonApi.toString().substringAfter("\"FOLDER\":").substringAfter("tempLink\":\"").substringBefore("\"")
-                listOf(Video(videoUrl, "$prefix Amazon", videoUrl))
+                listOf(Video(videoUrl = videoUrl, videoTitle = "$prefix Amazon"))
             }
 
             "uqload" -> uqloadExtractor.videosFromUrl(url, "$prefix ")
@@ -140,14 +144,14 @@ abstract class PelisPlus :
         "vidguard" to listOf("vembed", "guard", "listeamed", "bembed", "vgfplay"),
     )
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains(server, true) },
+                { it.videoTitle.contains(quality) },
+                { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }
@@ -216,8 +220,4 @@ abstract class PelisPlus :
 
     override fun episodeListSelector() = throw UnsupportedOperationException()
     override fun episodeFromElement(element: Element) = throw UnsupportedOperationException()
-
-    override fun videoListSelector() = throw UnsupportedOperationException()
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
 }

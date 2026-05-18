@@ -18,10 +18,12 @@ import eu.kanade.tachiyomi.animeextension.all.jellyfin.dto.SessionDto
 import eu.kanade.tachiyomi.animesource.UnmeteredSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
 import eu.kanade.tachiyomi.animesource.model.Video
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.HttpException
 import keiyoushi.utils.LazyMutable
 import keiyoushi.utils.Source
@@ -46,6 +48,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -56,6 +59,7 @@ import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.Request
 import okhttp3.Response
 import org.apache.commons.text.StringSubstitutor
 import java.io.IOException
@@ -338,10 +342,17 @@ class Jellyfin(private val suffix: String) :
 
     // ============================ Video Links =============================
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
-        if (!episode.url.startsWith("http")) throw Exception("Migrate from jellyfin to jellyfin")
+    override fun hosterListRequest(episode: SEpisode): Request = GET(episode.url, headers)
 
-        val item = client.get(episode.url).parseAs<ItemDto>(json)
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = runBlocking { getVideoList(response.request.url.toString()) }
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private suspend fun getVideoList(itemUrl: String): List<Video> {
+        if (!itemUrl.startsWith("http")) throw Exception("Migrate from jellyfin to jellyfin")
+
+        val item = client.get(itemUrl).parseAs<ItemDto>(json)
         val mediaSource = item.mediaSources?.firstOrNull() ?: return emptyList()
         val itemId = item.id
 
@@ -433,9 +444,8 @@ class Jellyfin(private val suffix: String) :
             .build()
 
         val staticVideo = Video(
-            url = Long.MAX_VALUE.toString(),
-            quality = "Source - ${videoBitrate}ps",
             videoUrl = staticUrl,
+            videoTitle = "Source - ${videoBitrate}ps",
             subtitleTracks = externalSubtitleList,
             headers = videoHeaders,
         )
@@ -458,9 +468,8 @@ class Jellyfin(private val suffix: String) :
 
             videoList.add(
                 Video(
-                    url = it.videoBitrate.toString(),
-                    quality = it.description,
                     videoUrl = url,
+                    videoTitle = it.description,
                     subtitleTracks = subtitleList,
                     headers = videoHeaders,
                 ),
@@ -470,10 +479,10 @@ class Jellyfin(private val suffix: String) :
         return videoList
     }
 
-    override fun List<Video>.sort(): List<Video> = sortedWith(
+    override fun List<Video>.sortVideos(): List<Video> = sortedWith(
         compareBy(
-            { it.url.equals(preferences.quality, true) },
-            { it.url.toLongOrNull() },
+            { it.videoTitle.equals(preferences.quality, true) },
+            { Constants.QUALITY_MIGRATION_MAP[it.videoTitle.substringBefore("p").substringAfterLast(" ").trim()] ?: it.videoTitle.filter(Char::isDigit).toLongOrNull() },
         ),
     ).reversed()
 

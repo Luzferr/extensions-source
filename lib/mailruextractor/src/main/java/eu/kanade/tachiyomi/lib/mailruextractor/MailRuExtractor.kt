@@ -74,9 +74,8 @@ class MailRuExtractor(
                 if (!rawUrl.startsWith("https://")) return@mapNotNull null
 
                 Video(
-                    url = rawUrl,
-                    quality = "${prefix}Mail.ru $key",
                     videoUrl = rawUrl,
+                    videoTitle = "${prefix}Mail.ru $key",
                     headers = videoHeaders,
                 )
             }.toList()

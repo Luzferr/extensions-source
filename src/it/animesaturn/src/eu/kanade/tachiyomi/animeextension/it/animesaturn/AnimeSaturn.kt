@@ -44,8 +44,7 @@ class AnimeSaturn :
 
     override fun popularAnimeSelector(): String = "div.sebox"
 
-    override fun popularAnimeRequest(page: Int): Request =
-        GET(if (isNewDomain()) "$baseUrl/ongoing?page=$page" else "$baseUrl/animeincorso?page=$page")
+    override fun popularAnimeRequest(page: Int): Request = GET(if (isNewDomain()) "$baseUrl/ongoing?page=$page" else "$baseUrl/animeincorso?page=$page")
 
     private fun formatTitle(titlestring: String): String = titlestring.replace("(ITA) ITA", "Dub ITA").replace("(ITA)", "Dub ITA").replace("Sub ITA", "")
 

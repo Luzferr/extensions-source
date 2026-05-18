@@ -10,17 +10,15 @@ import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
+import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.utils.getPreferencesLazy
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
 
 class Animeyt :
-    ParsedAnimeHttpSource(),
+    AnimeHttpSource(),
     ConfigurableAnimeSource {
 
     override val name = "AnimeYT"
@@ -45,34 +43,9 @@ class Animeyt :
 
     override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/mas-populares?page=$page")
 
-    override fun popularAnimeFromElement(element: Element): SAnime {
-        val anime = SAnime.create()
-        anime.setUrlWithoutDomain(element.select("div.video-card div.video-card-body div.video-title a").attr("href"))
-        anime.title = element.select("div.video-card div.video-card-body div.video-title a").text()
-        anime.thumbnail_url = element.select("div.video-card div.video-card-image a:nth-child(2) img").attr("src")
-        return anime
-    }
-
-    override fun popularAnimeNextPageSelector(): String = "ul.pagination li.page-item:last-child a"
-
-    override fun episodeListSelector() = "#caps ul.list-group li.list-group-item a"
-
-    override fun episodeFromElement(element: Element): SEpisode {
-        val episode = SEpisode.create()
-        val epNum = getNumberFromEpsString(element.select("span.sa-series-link__number").text())
-        episode.setUrlWithoutDomain(element.attr("href"))
-        val epParsed = when {
-            epNum.isNotEmpty() -> epNum.toFloatOrNull() ?: 1F
-            else -> 1F
-        }
-        episode.episode_number = epParsed
-        episode.name = "Episodio $epParsed"
-        return episode
-    }
-
     private fun getNumberFromEpsString(epsStr: String): String = epsStr.filter { it.isDigit() }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun popularAnimeParse(response: Response): AnimesPage {
         val document = response.asJsoup()
         val elements = document.select("div.video-block div.row div.col-md-2 div.video-card")
         val hasNextPage = document.select("ul.pagination li.page-item:last-child a").any()
@@ -107,8 +80,6 @@ class Animeyt :
                 }
             }
     }
-
-    private fun getNumberFromEpsString(epsStr: String): String = epsStr.filter { it.isDigit() }
 
     override fun hosterListRequest(episode: SEpisode): Request = GET(episode.url.toAbsoluteUrl(), headers)
 
@@ -169,13 +140,10 @@ class Animeyt :
         filters: AnimeFilterList,
     ): Request = GET("$baseUrl/search?q=$query&page=$page")
 
-    override fun searchAnimeFromElement(element: Element): SAnime = popularAnimeFromElement(element)
+    override fun searchAnimeParse(response: Response): AnimesPage = popularAnimeParse(response)
 
-    override fun searchAnimeNextPageSelector(): String = popularAnimeNextPageSelector()
-
-    override fun searchAnimeSelector(): String = popularAnimeSelector()
-
-    override fun animeDetailsParse(document: Document): SAnime {
+    override fun animeDetailsParse(response: Response): SAnime {
+        val document = response.asJsoup()
         val anime = SAnime.create()
         anime.thumbnail_url = document.selectFirst("div.sa-series-dashboard__poster div.sa-layout__line.sa-layout__line--sm div figure.sa-poster__fig img")!!.attr("src")
         anime.title = document.selectFirst("#info div.sa-layout__line div div.sa-title-series__title span")!!.html()
@@ -191,13 +159,12 @@ class Animeyt :
         else -> SAnime.UNKNOWN
     }
 
-    private fun String.toAbsoluteUrl(): String =
-        if (startsWith("http", true)) {
-            this
-        } else {
-            val separator = if (startsWith("/")) "" else "/"
-            "$baseUrl$separator$this"
-        }
+    private fun String.toAbsoluteUrl(): String = if (startsWith("http", true)) {
+        this
+    } else {
+        val separator = if (startsWith("/")) "" else "/"
+        "$baseUrl$separator$this"
+    }
 
     override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/ultimos-animes?page=$page")
 

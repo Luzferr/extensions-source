@@ -8,6 +8,7 @@ import aniyomi.lib.streamtapeextractor.StreamTapeExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -100,7 +101,16 @@ class FanPelis :
 
     override fun episodeFromElement(element: Element) = throw UnsupportedOperationException()
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         val videoList = mutableListOf<Video>()
         document.select(".movieplay iframe").map { iframe ->
@@ -139,18 +149,12 @@ class FanPelis :
         return videoList
     }
 
-    override fun videoListSelector() = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
-
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
-
-    override fun List<Video>.sort(): List<Video> = try {
+    override fun List<Video>.sortVideos(): List<Video> = try {
         val videoSorted = this.sortedWith(
-            compareBy<Video> { it.quality.replace("[0-9]".toRegex(), "") }.thenByDescending { getNumberFromString(it.quality) },
+            compareBy<Video> { it.videoTitle.replace("[0-9]".toRegex(), "") }.thenByDescending { getNumberFromString(it.videoTitle) },
         ).toTypedArray()
         val userPreferredQuality = preferences.getString("preferred_quality", "DoodStream")
-        val preferredIdx = videoSorted.indexOfFirst { x -> x.quality == userPreferredQuality }
+        val preferredIdx = videoSorted.indexOfFirst { x -> x.videoTitle == userPreferredQuality }
         if (preferredIdx != -1) {
             videoSorted.drop(preferredIdx + 1)
             videoSorted[0] = videoSorted[preferredIdx]
@@ -291,7 +295,7 @@ class FanPelis :
                             "es-MX,es-419;q=0.9,es;q=0.8,en;q=0.7,zh-TW;q=0.6,zh-CN;q=0.5,zh;q=0.4",
                         )
                         .build()
-                    return Video(videoUrl, "Streamlare:$type", videoUrl, headers = headers)
+                    return Video(videoUrl = videoUrl, videoTitle = "Streamlare:$type", headers = headers)
                 }
             }
             return null

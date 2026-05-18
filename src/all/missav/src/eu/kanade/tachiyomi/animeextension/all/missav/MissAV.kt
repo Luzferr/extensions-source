@@ -9,6 +9,7 @@ import aniyomi.lib.unpacker.Unpacker
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -158,19 +159,19 @@ class MissAV :
         }
     }
 
-    override fun relatedAnimeListRequest(anime: SAnime): Request {
+    fun relatedAnimeListRequest(anime: SAnime): Request {
         val body = MissAvApi.relatedData(getUuid(), anime.url.substringAfterLast("/"))
             .toRequestBody(jsonMime)
 
         return POST(MissAvApi.relatedURL(), docHeaders, body)
     }
 
-    override fun relatedAnimeListParse(response: Response): List<SAnime> {
+    fun relatedAnimeListParse(response: Response): List<SAnime> {
         val data = response.body.string().parseAs<List<RelatedResponse>>()
         return data.flatMap { it.toAnimeList() }
     }
 
-    override fun String.stripKeywordForRelatedAnimes(): List<String> = replace(regexSpecialCharacters, " ")
+    fun String.stripKeywordForRelatedAnimes(): List<String> = replace(regexSpecialCharacters, " ")
         .split(regexWhitespace)
         .map {
             // remove number only
@@ -227,7 +228,14 @@ class MissAV :
         },
     )
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
 
         val playlists = document.selectFirst("script:containsData(function(p,a,c,k,e,d))")
@@ -240,11 +248,11 @@ class MissAV :
         return playlistExtractor.extractFromHls(masterPlaylist, referer = "$baseUrl/")
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY, PREF_QUALITY_DEFAULT)!!
 
         return sortedWith(
-            compareBy { it.quality.contains(quality) },
+            compareBy { it.videoTitle.contains(quality, true) },
         ).reversed()
     }
 

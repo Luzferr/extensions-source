@@ -7,7 +7,6 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
 import keiyoushi.utils.UrlUtils
 import keiyoushi.utils.bodyString
-import keiyoushi.utils.commonEmptyHeaders
 import keiyoushi.utils.parallelMapNotNullBlocking
 import keiyoushi.utils.useAsJsoup
 import okhttp3.Headers
@@ -16,7 +15,7 @@ import okhttp3.OkHttpClient
 import java.io.File
 import kotlin.math.abs
 
-class PlaylistUtils(private val client: OkHttpClient, private val headers: Headers = commonEmptyHeaders) {
+class PlaylistUtils(private val client: OkHttpClient, private val headers: Headers = Headers.EMPTY) {
 
     // ================================ M3U8 ================================
 
@@ -100,9 +99,8 @@ class PlaylistUtils(private val client: OkHttpClient, private val headers: Heade
         if (PLAYLIST_SEPARATOR !in masterPlaylist) {
             return listOf(
                 Video(
-                    url = playlistUrl,
-                    quality = videoNameGen("Video"),
                     videoUrl = playlistUrl,
+                    videoTitle = videoNameGen("Video"),
                     headers = masterHeaders,
                     subtitleTracks = subtitleList,
                     audioTracks = audioList,
@@ -190,9 +188,8 @@ class PlaylistUtils(private val client: OkHttpClient, private val headers: Heade
             } ?: return@mapNotNull null
 
             bandwidth to Video(
-                url = videoUrl,
-                quality = videoNameGen(streamName),
                 videoUrl = videoUrl,
+                videoTitle = videoNameGen(streamName),
                 headers = videoHeadersGen(headers, referer, videoUrl),
                 subtitleTracks = subtitleTracks,
                 audioTracks = audioTracks,
@@ -356,9 +353,8 @@ class PlaylistUtils(private val client: OkHttpClient, private val headers: Heade
             val videoUrl = videoSrc.text()
 
             Video(
-                url = videoUrl,
-                quality = videoNameGen(res, bandwidth),
                 videoUrl = videoUrl,
+                videoTitle = videoNameGen(res, bandwidth),
                 headers = videoHeadersGen(headers, referer, videoUrl),
                 subtitleTracks = subtitleList,
                 audioTracks = audioTracks,

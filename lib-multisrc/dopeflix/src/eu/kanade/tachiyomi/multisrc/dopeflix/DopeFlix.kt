@@ -7,6 +7,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimeUpdateStrategy
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
@@ -221,7 +222,7 @@ abstract class DopeFlix(
 
     override fun searchAnimeSelector() = filmSelector
 
-    override fun relatedAnimeListSelector() = filmSelector
+    fun relatedAnimeListSelector() = filmSelector
 
     // ============================== Filters ===============================
 
@@ -313,11 +314,11 @@ abstract class DopeFlix(
         val seasonRequest = GET("$baseUrl/ajax/season/list/$id", apiHeaders(baseUrl + anime.url))
         return client.newCall(seasonRequest).awaitSuccess().use { response ->
             response.asJsoup().select(".ss-item")
-                .parallelFlatMap(::seasonFromElement).reversed()
+                .parallelFlatMap(::seasonEpisodesFromElement).reversed()
         }
     }
 
-    protected open suspend fun seasonFromElement(element: Element): List<SEpisode> = runCatching {
+    protected open suspend fun seasonEpisodesFromElement(element: Element): List<SEpisode> = runCatching {
         val season = element.elementSiblingIndex() + 1
         val seasonId = element.attr("data-id")
         client.newCall(GET("$baseUrl/ajax/season/episodes/$seasonId", apiHeaders()))
@@ -354,11 +355,18 @@ abstract class DopeFlix(
 
     // ============================ Video Links =============================
 
-    override fun videoListSelector() = "a.link-item"
+    fun videoListSelector() = "a.link-item"
 
-    override fun videoListRequest(episode: SEpisode): Request = GET("$baseUrl${episode.url}", apiHeaders("$baseUrl${episode.url}"))
+    fun videoListRequest(episode: SEpisode): Request = GET("$baseUrl${episode.url}", apiHeaders("$baseUrl${episode.url}"))
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
+        val videos = getVideoList(episode)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    override fun hosterListParse(response: Response): List<Hoster> = throw UnsupportedOperationException()
+
+    suspend fun getVideoList(episode: SEpisode): List<Video> {
         client.newCall(videoListRequest(episode)).awaitSuccess().use { response ->
 
             val hosterSelection = preferences.hostToggle
@@ -383,9 +391,8 @@ abstract class DopeFlix(
             return embedLinks.parallelCatchingFlatMap(::extractVideo)
                 .map { video ->
                     Video(
-                        url = video.url,
-                        quality = video.quality,
                         videoUrl = video.videoUrl,
+                        videoTitle = video.videoTitle,
                         headers = video.headers,
                         subtitleTracks = subLangOrder(video.subtitleTracks),
                         audioTracks = subLangOrder(video.audioTracks),
@@ -401,19 +408,15 @@ abstract class DopeFlix(
         else -> emptyList()
     }
 
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
-
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.prefQuality
         val server = preferences.prefServer
         val qualitiesList = PREF_QUALITY_LIST.reversed()
 
         return sortedWith(
-            compareByDescending<Video> { it.quality.contains(quality) }
-                .thenByDescending { video -> qualitiesList.indexOfLast { video.quality.contains(it) } }
-                .thenByDescending { it.quality.contains(server, true) },
+            compareByDescending<Video> { it.videoTitle.contains(quality) }
+                .thenByDescending { video -> qualitiesList.indexOfLast { video.videoTitle.contains(it) } }
+                .thenByDescending { it.videoTitle.contains(server, true) },
         )
     }
 

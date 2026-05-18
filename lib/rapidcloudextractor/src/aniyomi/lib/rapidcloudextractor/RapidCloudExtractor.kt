@@ -8,9 +8,12 @@ import aniyomi.lib.playlistutils.PlaylistUtils
 import eu.kanade.tachiyomi.animesource.model.Track
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.await
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.CacheControl
 import okhttp3.Headers
@@ -28,9 +31,14 @@ class RapidCloudExtractor(
     private val preferences: SharedPreferences,
 ) {
     private val json: Json by injectLazy()
-    private val playlistUtils by lazy { PlaylistUtils(client, headers) }
 
-    private val SOURCES_REGEX = Regex("/([^/?]+)(?:\\?|\$)")
+    private val playlistUtils by lazy { PlaylistUtils(client, headers) }
+    private val webViewResolver by lazy { WebViewResolver(headers) }
+
+    private val cacheControl = CacheControl.Builder().noStore().build()
+    private val noCacheClient = client.newBuilder()
+        .cache(null)
+        .build()
 
     companion object {
         private val SERVER_URL = arrayOf("https://rapid-cloud.co", "some-clouds-which-still-using-old-v6")
@@ -44,18 +52,10 @@ class RapidCloudExtractor(
         private const val PREF_KEY_KEY = "megacloud_key_"
         private const val PREF_KEY_DEFAULT = "[[0, 0]]"
 
-        repeat(10) { attempt ->
-            try {
-                val response = client.newCall(
-                    GET(
-                        embedUrl,
-                        headers = headers.newBuilder()
-                            .set("Referer", referer)
-                            .set("X-Requested-With", "XMLHttpRequest")
-                            .build()
-                    )
-                ).await()
-                val html = response.body.string()
+        private inline fun <reified R> runLocked(crossinline block: () -> R) = runBlocking(Dispatchers.IO) {
+            MUTEX.withLock { block() }
+        }
+    }
 
     // Stolen from TurkAnime
     private fun getKey(type: String): List<List<Int>> = runLocked {
@@ -96,52 +96,27 @@ class RapidCloudExtractor(
                 } catch (_: NumberFormatException) {
                     emptyList()
                 }
-                varPattern.findAll(html).forEach {
-                    val key = it.groupValues[1]
-                    if (key.length in 32..64) return key
-                }
-                objPattern.find(html)?.groupValues?.takeIf { it.size == 4 }?.let {
-                    val key = it[1] + it[2] + it[3]
-                    if (key.length in 32..64) return key
-                }
-            } catch (_: Exception) { /* silent retry */ }
-
-            if (attempt < 9) delay(300L shl attempt)
-        }
-        throw Exception("Failed to extract client key (_k)")
+            } else {
+                emptyList()
+            }
+        }.filter { it.isNotEmpty() }
+        val encoded = json.encodeToString(indexPairs)
+        preferences.edit().putString(PREF_KEY_KEY + type, encoded).apply()
     }
 
-    suspend fun videosFromUrl(
-        url: String,
-        prefix: String
-    ): List<Video> {
-        val videoUrl = url.toHttpUrl()
-        val referer = "https://${videoUrl.host}/"
-
-        val sourceId = SOURCES_REGEX.find(videoUrl.encodedPath)?.groupValues?.get(1)
-            ?: throw Exception("Failed to extract source ID")
-
-        val basePath = videoUrl.encodedPath.substringBeforeLast("/")
-        val sourcesBase = "${videoUrl.scheme}://${videoUrl.host}$basePath/getSources"
-
-        // Automatically decide if we need _k based on domain
-        val sourcesUrl = if (videoUrl.host.contains("megacloud", ignoreCase = true)) {
-            val clientKey = getClientKey(url, referer)
-            "$sourcesBase?id=$sourceId&_k=$clientKey"
-        } else {
-            // RapidCloud.co. — no _k needed
-            "$sourcesBase?id=$sourceId"
+    private fun cipherTextCleaner(data: String, type: String): Pair<String, String> {
+        val indexPairs = getKey(type)
+        val (password, ciphertext, _) = indexPairs.fold(Triple("", data, 0)) { previous, item ->
+            val start = item.first() + previous.third
+            val end = start + item.last()
+            val passSubstr = data.substring(start, end)
+            val passPart = previous.first + passSubstr
+            val cipherPart = previous.second.replace(passSubstr, "")
+            Triple(passPart, cipherPart, previous.third + item.last())
         }
 
-        val sourcesResponse = client.newCall(
-            GET(
-                sourcesUrl,
-                headers = headers.newBuilder()
-                    .set("X-Requested-With", "XMLHttpRequest")
-                    .set("Referer", url)
-                    .build()
-            )
-        ).await()
+        return Pair(ciphertext, password)
+    }
 
     private fun tryDecrypting(ciphered: String, type: String, attempts: Int = 0): String {
         if (attempts > 2) throw Exception("Maximum decryption attempts exceeded")
@@ -151,6 +126,7 @@ class RapidCloudExtractor(
             shouldUpdateKey = true
             tryDecrypting(ciphered, type, attempts + 1)
         }
+    }
 
     fun getVideosFromUrl(url: String, type: String, name: String): List<Video> {
         val videos = getVideoDto(url)
@@ -278,32 +254,3 @@ class RapidCloudExtractor(
     @Serializable
     data class TrackDto(val file: String, val kind: String, val label: String = "")
 }
-
-
-@Serializable
-private data class SourcesResponseDto(
-    val sources: List<VideoLink>? = null,
-    val encrypted: Boolean = false,
-    val tracks: List<TrackDto>? = null,
-    val intro: IntroOutro? = null,
-    val outro: IntroOutro? = null,
-)
-
-@Serializable
-private data class VideoLink(
-    val file: String,
-    val type: String? = null,
-)
-
-@Serializable
-private data class TrackDto(
-    val file: String,
-    val kind: String,
-    val label: String? = null,
-)
-
-@Serializable
-private data class IntroOutro(
-    val start: Int = 0,
-    val end: Int = 0,
-)

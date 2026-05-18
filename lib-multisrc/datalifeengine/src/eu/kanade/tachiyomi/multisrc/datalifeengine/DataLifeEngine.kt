@@ -162,14 +162,14 @@ abstract class DataLifeEngine(
         ),
     ).reversed()
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString("preferred_quality", "720")!!
         val server = preferences.getString("preferred_server", "Upstream")!!
 
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(quality) },
-                { it.quality.contains(server, true) },
+                { it.videoTitle.contains(quality) },
+                { it.videoTitle.contains(server, true) },
             ),
         ).reversed()
     }

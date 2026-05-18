@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimeUpdateStrategy
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -48,6 +49,8 @@ class Jable(override val lang: String) : AnimeHttpSource() {
 
     override fun episodeListParse(response: Response) = throw UnsupportedOperationException()
 
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
     override suspend fun getEpisodeList(anime: SAnime): List<SEpisode> = listOf(
         SEpisode.create().apply {
             name = "Episode"
@@ -55,11 +58,16 @@ class Jable(override val lang: String) : AnimeHttpSource() {
         },
     )
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private fun videoListParse(response: Response): List<Video> {
         val doc = response.asJsoup()
         val videoUrl = doc.selectFirst("script:containsData(var hlsUrl)")!!.data()
             .substringAfter("var hlsUrl = '").substringBefore("'")
-        return listOf(Video(videoUrl, "Default", videoUrl))
+        return listOf(Video(videoUrl = videoUrl, videoTitle = "Default"))
     }
 
     override fun latestUpdatesParse(response: Response): AnimesPage {

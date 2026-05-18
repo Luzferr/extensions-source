@@ -73,7 +73,7 @@ class MegaNzExtractor(
                 "Video"
             }
 
-        return listOf(Video(url = proxyUrl, quality = "$prefix$quality", videoUrl = proxyUrl))
+        return listOf(Video(videoUrl = proxyUrl, videoTitle = "$prefix$quality"))
     }
 
     private fun parseUrl(url: String): Pair<String, String>? {

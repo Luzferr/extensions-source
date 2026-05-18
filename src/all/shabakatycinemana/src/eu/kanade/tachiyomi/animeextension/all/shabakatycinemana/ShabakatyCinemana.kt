@@ -6,6 +6,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
@@ -14,6 +15,7 @@ import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
@@ -74,7 +76,7 @@ object VideoDeserializer : DeserializationStrategy<Video> {
         val videoUrl = jsonObject["videoUrl"]?.jsonPrimitive?.content!!
         val quality = jsonObject["resolution"]?.jsonPrimitive?.content.orEmpty()
 
-        return Video(url = videoUrl, videoUrl = videoUrl, quality = quality)
+        return Video(videoUrl = videoUrl, videoTitle = quality)
     }
 }
 
@@ -364,7 +366,20 @@ class ShabakatyCinemana :
 
     override fun episodeListParse(response: Response) = response.asModelList(SEpisodeDeserializer)
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
+    override fun hosterListRequest(episode: SEpisode) = GET("$apiBaseUrl/transcoddedFiles/id/${episode.url}")
+        .newBuilder()
+        .tag(SEpisode::class.java, episode)
+        .build()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = runBlocking { getVideoList(response) }
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private suspend fun getVideoList(response: Response): List<Video> {
+        val episode = response.request.tag(SEpisode::class.java) ?: throw Exception("Missing episode context")
         val extension = preferences.getString(PREF_SUBTITLE_EXT_KEY, PREF_SUBTITLE_EXT_DEFAULT)!!
         val language = preferences.getString(PREF_SUBTITLE_LANG_KEY, PREF_SUBTITLE_LANG_DEFAULT)!!
         val subs = this.client.newCall(GET("$apiBaseUrl/translationFiles/id/${episode.url}")).execute()
@@ -376,21 +391,21 @@ class ShabakatyCinemana :
                 ),
             ).reversed()
 
-        return super.getVideoList(episode).map {
-            Video(url = it.url, quality = it.quality, videoUrl = it.videoUrl, subtitleTracks = subs)
+        return response.asModelList(VideoDeserializer).map {
+            Video(
+                videoUrl = it.videoUrl,
+                videoTitle = it.videoTitle,
+                subtitleTracks = subs,
+            )
         }
     }
 
-    override fun videoListRequest(episode: SEpisode) = GET("$apiBaseUrl/transcoddedFiles/id/${episode.url}")
-
-    override fun videoListParse(response: Response) = response.asModelList(VideoDeserializer)
-
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains(quality) },
+                { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }

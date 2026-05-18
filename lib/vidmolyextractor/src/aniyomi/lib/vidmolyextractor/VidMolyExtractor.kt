@@ -4,13 +4,12 @@ import aniyomi.lib.playlistutils.PlaylistUtils
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
-import keiyoushi.utils.commonEmptyHeaders
 import keiyoushi.utils.parallelCatchingFlatMap
 import keiyoushi.utils.useAsJsoup
 import okhttp3.Headers
 import okhttp3.OkHttpClient
 
-class VidMolyExtractor(private val client: OkHttpClient, headers: Headers = commonEmptyHeaders) {
+class VidMolyExtractor(private val client: OkHttpClient, headers: Headers = Headers.EMPTY) {
 
     companion object {
         const val BASE_URL = "https://vidmoly.biz"

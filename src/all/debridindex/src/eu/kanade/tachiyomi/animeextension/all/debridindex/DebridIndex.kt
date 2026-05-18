@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.animeextension.all.debridindex.dto.SubFiles
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -120,7 +121,27 @@ class DebridIndex :
     private fun parseDate(dateStr: String): Long = runCatching { DATE_FORMATTER.parse(dateStr)?.time }
         .getOrNull() ?: 0L
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> = listOf(Video(episode.url, episode.name.split("/").last(), episode.url))
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
+    override fun hosterListRequest(episode: SEpisode): Request = GET(baseUrl, headers)
+        .newBuilder()
+        .tag(SEpisode::class.java, episode)
+        .build()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val episode = response.request.tag(SEpisode::class.java) ?: throw Exception("Missing episode context")
+        return listOf(
+            Hoster(
+                hosterName = name,
+                videoList = listOf(
+                    Video(
+                        videoUrl = episode.url,
+                        videoTitle = episode.name.split("/").last(),
+                    ),
+                ),
+            ),
+        )
+    }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         // Debrid provider

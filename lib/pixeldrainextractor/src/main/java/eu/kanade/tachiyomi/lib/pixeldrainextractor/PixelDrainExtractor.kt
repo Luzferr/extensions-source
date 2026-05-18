@@ -7,10 +7,10 @@ class PixelDrainExtractor(private val client: OkHttpClient) {
     fun videosFromUrl(url: String, prefix: String = ""): List<Video> {
         val mId = Regex("/u/(.*)").find(url)?.groupValues?.get(1)
         return if (mId.isNullOrEmpty()) {
-            listOf(Video(url, "${prefix}PixelDrain", url))
+            listOf(Video(videoUrl = url, videoTitle = "${prefix}PixelDrain"))
         } else {
             val downloadUrl = "https://pixeldrain.net/api/file/$mId?download"
-            listOf(Video(downloadUrl, "${prefix}PixelDrain", downloadUrl))
+            listOf(Video(videoUrl = downloadUrl, videoTitle = "${prefix}PixelDrain"))
         }
     }
 }

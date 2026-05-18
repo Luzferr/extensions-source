@@ -28,6 +28,8 @@ class Lacartoons :
     AnimeHttpSource(),
     ConfigurableAnimeSource {
 
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
     override val name = "LACartoons"
 
     override val baseUrl = "https://www.lacartoons.com"
@@ -133,7 +135,6 @@ class Lacartoons :
 
     private fun serverVideoResolver(url: String): List<Video> {
         val embedUrl = url.lowercase()
-        val extractor = SendvidExtractor(client, headers)
         return when {
             embedUrl.contains("ok.ru") || embedUrl.contains("okru") -> OkruExtractor(client).videosFromUrl(url)
 
@@ -160,14 +161,14 @@ class Lacartoons :
         }
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains(server, true) },
+                { it.videoTitle.contains(quality) },
+                { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }

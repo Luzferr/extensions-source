@@ -10,6 +10,7 @@ import aniyomi.lib.vkextractor.VkExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -18,12 +19,12 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parallelCatchingFlatMapBlocking
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.util.Calendar
 
 class AsiaLiveAction :
     ParsedAnimeHttpSource(),
@@ -83,25 +84,23 @@ class AsiaLiveAction :
 
     override fun popularAnimeNextPageSelector(): String = ".paginado a:has(i.fa-angle-right)"
 
-    override fun animeDetailsParse(document: Document): SAnime {
-        return SAnime.create().apply {
-            thumbnail_url = document.selectFirst("div.Poster")?.attr("style")?.extractBackgroundUrl()
-                ?: document.selectFirst("figure img")?.attr("abs:src")?.getHdImg()
-            title = document.selectFirst("h2.Title, h1.Title")?.text()?.trim().orEmpty()
-            val descriptionText = document.select("section article > p")
-                .joinToString("\n\n") { it.text().trim() }
-            description = descriptionText.takeIf { it.isNotBlank() }
-            val genreText = document.select("footer a.tag").joinToString { it.text() }
-            genre = genreText.takeIf { it.isNotBlank() }
-            val artistText = document.select("#elenco .actor-nm").joinToString { it.text() }
-            artist = artistText.takeIf { it.isNotBlank() }
-            val statusText = document.selectFirst(".categorias .estado")?.text()?.lowercase()
-            status = when {
-                statusText?.contains("finalizado") == true -> SAnime.COMPLETED
-                statusText?.contains("publicacion") == true -> SAnime.ONGOING
-                statusText?.contains("publicación") == true -> SAnime.ONGOING
-                else -> SAnime.UNKNOWN
-            }
+    override fun animeDetailsParse(document: Document): SAnime = SAnime.create().apply {
+        thumbnail_url = document.selectFirst("div.Poster")?.attr("style")?.extractBackgroundUrl()
+            ?: document.selectFirst("figure img")?.attr("abs:src")?.getHdImg()
+        title = document.selectFirst("h2.Title, h1.Title")?.text()?.trim().orEmpty()
+        val descriptionText = document.select("section article > p")
+            .joinToString("\n\n") { it.text().trim() }
+        description = descriptionText.takeIf { it.isNotBlank() }
+        val genreText = document.select("footer a.tag").joinToString { it.text() }
+        genre = genreText.takeIf { it.isNotBlank() }
+        val artistText = document.select("#elenco .actor-nm").joinToString { it.text() }
+        artist = artistText.takeIf { it.isNotBlank() }
+        val statusText = document.selectFirst(".categorias .estado")?.text()?.lowercase()
+        status = when {
+            statusText?.contains("finalizado") == true -> SAnime.COMPLETED
+            statusText?.contains("publicacion") == true -> SAnime.ONGOING
+            statusText?.contains("publicación") == true -> SAnime.ONGOING
+            else -> SAnime.UNKNOWN
         }
     }
 
@@ -121,7 +120,7 @@ class AsiaLiveAction :
         }
     } else {
         val epNum = getNumberFromEpsString(element.select("div.flex-grow-1 p").text())
-        SEpisode.create().apply {
+        return SEpisode.create().apply {
             setUrlWithoutDomain(element.attr("abs:href"))
             episode_number = when {
                 epNum.isNotEmpty() -> epNum.toFloatOrNull() ?: 1F
@@ -129,7 +128,6 @@ class AsiaLiveAction :
             }
             name = element.select("div.flex-grow-1 p").text().trim()
         }
-        return episode
     }
 
     private fun getNumberFromEpsString(epsStr: String): String = epsStr.filter { it.isDigit() }
@@ -147,7 +145,16 @@ class AsiaLiveAction :
             .toList()
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
 
         val scriptData = document.selectFirst("script:containsData(var allVideos)")?.data()
@@ -210,7 +217,7 @@ class AsiaLiveAction :
                         client.newCall(GET("https://www.amazon.com/drive/v1/nodes/$epId/children?resourceVersion=V2&ContentType=JSON&limit=200&sort=%5B%22kind+DESC%22%2C+%22modifiedDate+DESC%22%5D&asset=ALL&tempLink=true&shareId=$shareId"))
                             .execute().asJsoup()
                     val videoUrl = amazonApi.toString().substringAfter("\"FOLDER\":").substringAfter("tempLink\":\"").substringBefore("\"")
-                    listOf(Video(videoUrl, "Amazon", videoUrl))
+                    listOf(Video(videoUrl = videoUrl, videoTitle = "Amazon"))
                 } else {
                     emptyList()
                 }
@@ -220,20 +227,14 @@ class AsiaLiveAction :
         }
     }
 
-    override fun videoListSelector() = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
-
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
-
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains(server, true) },
+                { it.videoTitle.contains(quality) },
+                { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }
@@ -334,13 +335,11 @@ class AsiaLiveAction :
         return match.groupValues[2].toAbsoluteUrl()
     }
 
-    private fun String.toAbsoluteUrl(): String {
-        return when {
-            startsWith("http://") || startsWith("https://") -> this
-            startsWith("//") -> "https:$this"
-            startsWith("/") -> "$baseUrl$this"
-            else -> "$baseUrl/$this"
-        }
+    private fun String.toAbsoluteUrl(): String = when {
+        startsWith("http://") || startsWith("https://") -> this
+        startsWith("//") -> "https:$this"
+        startsWith("/") -> "$baseUrl$this"
+        else -> "$baseUrl/$this"
     }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {

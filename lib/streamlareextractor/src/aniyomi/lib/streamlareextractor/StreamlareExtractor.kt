@@ -33,8 +33,11 @@ class StreamlareExtractor(private val client: OkHttpClient) {
                         else -> urlPart
                     }
                 }
-                Video(url = videoUrl, quality = buildQuality(quality, prefix, suffix), videoUrl = videoUrl,
-                    subtitleTracks = emptyList(), audioTracks = emptyList()
+                Video(
+                    videoUrl = videoUrl,
+                    videoTitle = buildQuality(quality, prefix, suffix),
+                    subtitleTracks = emptyList(),
+                    audioTracks = emptyList(),
                 )
             }
         } else {
@@ -45,8 +48,11 @@ class StreamlareExtractor(private val client: OkHttpClient) {
                     .replace("\\", "")
                 val response = client.newCall(POST(apiUrl)).execute()
                 val videoUrl = response.request.url.toString()
-                Video(url = videoUrl, quality = buildQuality(quality, prefix, suffix), videoUrl = videoUrl,
-                    subtitleTracks = emptyList(), audioTracks = emptyList()
+                Video(
+                    videoUrl = videoUrl,
+                    videoTitle = buildQuality(quality, prefix, suffix),
+                    subtitleTracks = emptyList(),
+                    audioTracks = emptyList(),
                 )
             }
         }

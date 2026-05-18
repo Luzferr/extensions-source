@@ -14,6 +14,7 @@ import aniyomi.lib.voeextractor.VoeExtractor
 import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -22,6 +23,7 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.utils.catchingFlatMapBlocking
 import keiyoushi.utils.getPreferencesLazy
+import kotlinx.coroutines.runBlocking
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -117,7 +119,16 @@ class Animejl :
     private val uqloadExtractor by lazy { UqloadExtractor(client) }
     private val mp4uploadExtractor by lazy { Mp4uploadExtractor(client) }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response)
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         val scriptContent = document.selectFirst("script:containsData(var video = [)")?.data()
             ?: return emptyList()
@@ -129,21 +140,15 @@ class Animejl :
                 url.contains("streamtape") -> listOfNotNull(streamTapeExtractor.videoFromUrl(url))
                 url.contains("ok.ru") -> okruExtractor.videosFromUrl(url)
                 url.contains("yourupload") -> yourUploadExtractor.videoFromUrl(url, headers)
-                url.contains("streamwish") || url.contains("playerwish") -> streamWishExtractor.videosFromUrl(url)
-                url.contains("streamhidevid") -> vidHideExtractor.videosFromUrl(url)
-                url.contains("voe") -> voeExtractor.videosFromUrl(url)
-                url.contains("uqload") -> uqloadExtractor.videosFromUrl(url)
+                url.contains("streamwish") || url.contains("playerwish") -> runBlocking { streamWishExtractor.videosFromUrl(url) }
+                url.contains("streamhidevid") -> runBlocking { vidHideExtractor.videosFromUrl(url) }
+                url.contains("voe") -> runBlocking { voeExtractor.videosFromUrl(url) }
+                url.contains("uqload") -> runBlocking { uqloadExtractor.videosFromUrl(url) }
                 url.contains("mp4upload") -> mp4uploadExtractor.videosFromUrl(url, headers)
                 else -> universalExtractor.videosFromUrl(url, headers)
             }
         }
     }
-
-    override fun videoListSelector() = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
-
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
 
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
         val params = AnimejlFilters.getSearchParameters(filters)
@@ -187,14 +192,14 @@ class Animejl :
 
     override fun latestUpdatesSelector() = popularAnimeSelector()
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         return this.sortedWith(
             compareBy(
-                { it.quality.contains(server, true) },
-                { it.quality.contains(quality) },
-                { Regex("""(\d+)p""").find(it.quality)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
+                { it.videoTitle.contains(server, true) },
+                { it.videoTitle.contains(quality) },
+                { Regex("""(\d+)p""").find(it.videoTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0 },
             ),
         ).reversed()
     }
