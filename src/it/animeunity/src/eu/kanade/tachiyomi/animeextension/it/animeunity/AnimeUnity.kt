@@ -1,8 +1,6 @@
 package eu.kanade.tachiyomi.animeextension.it.animeunity
 
 import android.annotation.SuppressLint
-import android.app.Application
-import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
@@ -16,7 +14,8 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.util.asJsoup
-import eu.kanade.tachiyomi.util.parseAs
+import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.Json
 import okhttp3.Headers
 import okhttp3.HttpUrl
@@ -25,8 +24,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 
@@ -45,9 +42,7 @@ class AnimeUnity :
 
     private val json: Json by injectLazy()
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    private val preferences by getPreferencesLazy()
 
     // ============================== Popular ===============================
 
@@ -194,23 +189,22 @@ class AnimeUnity :
     private fun searchAnimeParse(
         response: Response,
         page: Int,
-    ): AnimesPage =
-        if (response.request.method == "POST") {
-            val data = response.parseAs<SearchResponse>()
+    ): AnimesPage = if (response.request.method == "POST") {
+        val data = response.parseAs<SearchResponse>()
 
-            val animeList =
-                data.records.map {
-                    SAnime.create().apply {
-                        title = it.title_eng
-                        thumbnail_url = it.imageurl
-                        url = "${it.id}-${it.slug}"
-                    }
+        val animeList =
+            data.records.map {
+                SAnime.create().apply {
+                    title = it.title_eng
+                    thumbnail_url = it.imageurl
+                    url = "${it.id}-${it.slug}"
                 }
+            }
 
-            AnimesPage(animeList, data.tot - page * 30 >= 30 && data.tot > 30)
-        } else {
-            popularAnimeParse(response)
-        }
+        AnimesPage(animeList, data.tot - page * 30 >= 30 && data.tot > 30)
+    } else {
+        popularAnimeParse(response)
+    }
 
     override fun getFilterList(): AnimeFilterList = AnimeUnityFilters.FILTER_LIST
 
@@ -405,7 +399,7 @@ class AnimeUnity :
 
         require(videoList.isNotEmpty()) { "Failed to fetch videos" }
 
-        return videoList.sort()
+        return videoList
     }
 
     override fun videoListRequest(episode: SEpisode): Request = throw UnsupportedOperationException()
@@ -414,12 +408,11 @@ class AnimeUnity :
 
     // ============================= Utilities ==============================
 
-    private fun parseStatus(statusString: String): Int =
-        when (statusString) {
-            "In Corso" -> SAnime.ONGOING
-            "Terminato" -> SAnime.COMPLETED
-            else -> SAnime.UNKNOWN
-        }
+    private fun parseStatus(statusString: String): Int = when (statusString) {
+        "In Corso" -> SAnime.ONGOING
+        "Terminato" -> SAnime.COMPLETED
+        else -> SAnime.UNKNOWN
+    }
 
     private fun addFromApi(
         start: Int,
@@ -453,12 +446,11 @@ class AnimeUnity :
             }
     }
 
-    private fun String.falseIfEmpty(): String =
-        if (this.isEmpty()) {
-            "false"
-        } else {
-            "\"${this}\""
-        }
+    private fun String.falseIfEmpty(): String = if (this.isEmpty()) {
+        "false"
+    } else {
+        "\"${this}\""
+    }
 
     @SuppressLint("SimpleDateFormat")
     private fun parseDate(date: String): Long {

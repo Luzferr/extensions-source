@@ -4,14 +4,13 @@ import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 
 object EvangelionECFilters {
-    fun getFilterList(): AnimeFilterList =
-        AnimeFilterList(
-            AnimeFilter.Header("Los filtros se ignoran con búsqueda por texto"),
-            GenreFilter(),
-            StatusFilter(),
-            TypeFilter(),
-            LanguageFilter(),
-        )
+    fun getFilterList(): AnimeFilterList = AnimeFilterList(
+        AnimeFilter.Header("Los filtros se ignoran con búsqueda por texto"),
+        GenreFilter(),
+        StatusFilter(),
+        TypeFilter(),
+        LanguageFilter(),
+    )
 
     class GenreFilter :
         SelectFilter(
@@ -86,9 +85,9 @@ object EvangelionECFilters {
         displayName: String,
         private val options: Array<Pair<String, String>>,
     ) : AnimeFilter.Select<String>(
-            displayName,
-            options.map { it.first }.toTypedArray(),
-        ) {
+        displayName,
+        options.map { it.first }.toTypedArray(),
+    ) {
         fun selected(): String? {
             val value = options[state].second
             return value.ifBlank { null }

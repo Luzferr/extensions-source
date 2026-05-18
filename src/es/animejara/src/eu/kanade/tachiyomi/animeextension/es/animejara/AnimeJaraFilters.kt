@@ -4,23 +4,22 @@ import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 
 object AnimeJaraFilters {
-    fun getFilterList(): AnimeFilterList =
-        AnimeFilterList(
-            AnimeFilter.Header("Los filtros se ignoran con búsqueda por texto"),
-            TypeFilter(),
-            StatusFilter(),
-            LanguageFilter(),
-            YearFilter(),
-            GenreFilter(),
-        )
+    fun getFilterList(): AnimeFilterList = AnimeFilterList(
+        AnimeFilter.Header("Los filtros se ignoran con búsqueda por texto"),
+        TypeFilter(),
+        StatusFilter(),
+        LanguageFilter(),
+        YearFilter(),
+        GenreFilter(),
+    )
 
     open class UriPartFilter(
         displayName: String,
         private val vals: Array<Pair<String, String>>,
     ) : AnimeFilter.Select<String>(
-            displayName,
-            vals.map { it.first }.toTypedArray(),
-        ) {
+        displayName,
+        vals.map { it.first }.toTypedArray(),
+    ) {
         fun toUriPart(): String? {
             val value = vals[state].second
             return value.ifBlank { null }

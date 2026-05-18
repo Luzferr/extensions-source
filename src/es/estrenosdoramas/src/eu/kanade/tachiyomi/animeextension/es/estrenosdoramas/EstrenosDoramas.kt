@@ -1,9 +1,13 @@
 package eu.kanade.tachiyomi.animeextension.es.estrenosdoramas
 
-import android.app.Application
-import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import aniyomi.lib.okruextractor.OkruExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
+import aniyomi.lib.vidguardextractor.VidGuardExtractor
+import aniyomi.lib.vidhideextractor.VidHideExtractor
+import aniyomi.lib.voeextractor.VoeExtractor
+import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
@@ -11,21 +15,17 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
-import eu.kanade.tachiyomi.lib.okruextractor.OkruExtractor
-import eu.kanade.tachiyomi.lib.streamhidevidextractor.StreamHideVidExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
-import eu.kanade.tachiyomi.lib.vidguardextractor.VidGuardExtractor
-import eu.kanade.tachiyomi.lib.voeextractor.VoeExtractor
-import eu.kanade.tachiyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
-import eu.kanade.tachiyomi.util.parallelCatchingFlatMapBlocking
+import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.parallelCatchingFlatMapBlocking
+import kotlinx.coroutines.runBlocking
 import okhttp3.Request
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 
-class EstrenosDoramas : ConfigurableAnimeSource, AnimeHttpSource() {
+class EstrenosDoramas :
+    AnimeHttpSource(),
+    ConfigurableAnimeSource {
 
     override val name = "EstrenosDoramas"
 
@@ -35,9 +35,7 @@ class EstrenosDoramas : ConfigurableAnimeSource, AnimeHttpSource() {
 
     override val supportsLatest = true
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    private val preferences by getPreferencesLazy()
 
     companion object {
         private const val PREF_QUALITY_KEY = "preferred_quality"
@@ -112,7 +110,9 @@ class EstrenosDoramas : ConfigurableAnimeSource, AnimeHttpSource() {
             val title = it.select(".epl-title").text().trim()
             val epNumber = try {
                 """(\d+(\.\d+)?)""".toRegex().find(title)?.groupValues?.get(1)?.toFloat() ?: (idx + 1f)
-            } catch (_: Exception) { idx + 1f }
+            } catch (_: Exception) {
+                idx + 1f
+            }
 
             SEpisode.create().apply {
                 episode_number = epNumber
@@ -135,22 +135,20 @@ class EstrenosDoramas : ConfigurableAnimeSource, AnimeHttpSource() {
     /*--------------------------------Video extractors------------------------------------*/
     private val okruExtractor by lazy { OkruExtractor(client) }
     private val streamWishExtractor by lazy { StreamWishExtractor(client, headers) }
-    private val streamHideVidExtractor by lazy { StreamHideVidExtractor(client, headers) }
+    private val vidHideExtractor by lazy { VidHideExtractor(client, headers) }
     private val voeExtractor by lazy { VoeExtractor(client, headers) }
     private val yourUploadExtractor by lazy { YourUploadExtractor(client) }
     private val vidGuardExtractor by lazy { VidGuardExtractor(client) }
 
-    private fun serverVideoResolver(url: String): List<Video> {
-        return when {
-            arrayOf("ok.ru", "okru").any(url) -> okruExtractor.videosFromUrl(url)
-            arrayOf("filelions", "lion", "fviplions").any(url) -> streamWishExtractor.videosFromUrl(url, videoNameGen = { "FileLions:$it" })
-            arrayOf("wishembed", "streamwish", "strwish", "wish").any(url) -> streamWishExtractor.videosFromUrl(url, videoNameGen = { "StreamWish:$it" })
-            arrayOf("vidhide", "streamhide", "guccihide", "streamvid").any(url) -> streamHideVidExtractor.videosFromUrl(url)
-            arrayOf("voe", "robertordercharacter", "donaldlineelse").any(url) -> voeExtractor.videosFromUrl(url)
-            arrayOf("yourupload", "upload").any(url) -> yourUploadExtractor.videoFromUrl(url, headers = headers)
-            arrayOf("vembed", "guard", "listeamed", "bembed", "vgfplay").any(url) -> vidGuardExtractor.videosFromUrl(url)
-            else -> emptyList()
-        }
+    private fun serverVideoResolver(url: String): List<Video> = when {
+        arrayOf("ok.ru", "okru").any(url) -> okruExtractor.videosFromUrl(url)
+        arrayOf("filelions", "lion", "fviplions").any(url) -> streamWishExtractor.videosFromUrl(url, videoNameGen = { "FileLions:$it" })
+        arrayOf("wishembed", "streamwish", "strwish", "wish").any(url) -> streamWishExtractor.videosFromUrl(url, videoNameGen = { "StreamWish:$it" })
+        arrayOf("vidhide", "streamhide", "guccihide", "streamvid").any(url) -> runBlocking { vidHideExtractor.videosFromUrl(url) }
+        arrayOf("voe", "robertordercharacter", "donaldlineelse").any(url) -> voeExtractor.videosFromUrl(url)
+        arrayOf("yourupload", "upload").any(url) -> yourUploadExtractor.videoFromUrl(url, headers = headers)
+        arrayOf("vembed", "guard", "listeamed", "bembed", "vgfplay").any(url) -> vidGuardExtractor.videosFromUrl(url)
+        else -> emptyList()
     }
 
     override fun List<Video>.sort(): List<Video> {

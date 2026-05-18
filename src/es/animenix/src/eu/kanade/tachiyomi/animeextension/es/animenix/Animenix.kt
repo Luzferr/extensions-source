@@ -3,13 +3,11 @@ package eu.kanade.tachiyomi.animeextension.es.animenix
 import androidx.preference.CheckBoxPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import aniyomi.lib.filemoonextractor.FilemoonExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
+import aniyomi.lib.universalextractor.UniversalExtractor
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
-import eu.kanade.tachiyomi.animesource.model.Hoster
-import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.lib.filemoonextractor.FilemoonExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
-import eu.kanade.tachiyomi.lib.universalextractor.UniversalExtractor
 import eu.kanade.tachiyomi.multisrc.dooplay.DooPlay
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
@@ -20,11 +18,12 @@ import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
-class Animenix : DooPlay(
-    "es",
-    "Animenix",
-    "https://animenix.com",
-) {
+class Animenix :
+    DooPlay(
+        "es",
+        "Animenix",
+        "https://animenix.com",
+    ) {
 
     // ============================== Popular ===============================
     override fun popularAnimeRequest(page: Int) = GET("$baseUrl/ratings/$page")
@@ -38,21 +37,13 @@ class Animenix : DooPlay(
     // ============================== Episodes ==============================
     override val episodeMovieText = "Película"
 
-    override fun hosterListParse(response: Response): List<Hoster> {
+    override fun videoListParse(response: Response): List<Video> {
         val players = response.asJsoup().select("li.dooplay_player_option")
-        val videoList = players.flatMap { player ->
+        return players.flatMap { player ->
             runCatching {
                 val link = getPlayerUrl(player)
                 getPlayerVideos(link)
             }.getOrElse { emptyList() }
-        }
-
-        val hosterMap = videoList.groupBy { video ->
-            video.videoTitle.substringBefore(":").trim()
-        }
-
-        return hosterMap.map { (name, videos) ->
-            Hoster(hosterName = name, videoList = videos)
         }
     }
 
@@ -77,21 +68,17 @@ class Animenix : DooPlay(
     private val streamWishExtractor by lazy { StreamWishExtractor(headers = headers, client = client) }
     private val universalExtractor by lazy { UniversalExtractor(client) }
 
-    private fun getPlayerVideos(link: String): List<Video> {
-        return when {
-            link.contains("filemoon") -> filemoonExtractor.videosFromUrl(link)
-            link.contains("swdyu") -> streamWishExtractor.videosFromUrl(link)
-            link.contains("wishembed") || link.contains("cdnwish") || link.contains("flaswish") || link.contains("sfastwish") || link.contains("streamwish") || link.contains("asnwish") -> streamWishExtractor.videosFromUrl(link)
-            else -> universalExtractor.videosFromUrl(link, headers)
-        }
+    private fun getPlayerVideos(link: String): List<Video> = when {
+        link.contains("filemoon") -> filemoonExtractor.videosFromUrl(link)
+        link.contains("swdyu") -> streamWishExtractor.videosFromUrl(link)
+        link.contains("wishembed") || link.contains("cdnwish") || link.contains("flaswish") || link.contains("sfastwish") || link.contains("streamwish") || link.contains("asnwish") -> streamWishExtractor.videosFromUrl(link)
+        else -> universalExtractor.videosFromUrl(link, headers)
     }
 
     // =========================== Anime Details ============================
-    override fun Document.getDescription(): String {
-        return select("$additionalInfoSelector div.wp-content p")
-            .eachText()
-            .joinToString("\n")
-    }
+    override fun Document.getDescription(): String = select("$additionalInfoSelector div.wp-content p")
+        .eachText()
+        .joinToString("\n")
 
     override val additionalInfoItems = listOf("Título", "Temporadas", "Episodios", "Duración media")
 
@@ -100,9 +87,6 @@ class Animenix : DooPlay(
     override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/ver/page/$page", headers)
 
     override fun latestUpdatesNextPageSelector() = "div.pagination > *:last-child:not(span):not(.current)"
-
-    override fun seasonListSelector(): String = throw UnsupportedOperationException()
-    override fun seasonFromElement(element: Element): SAnime =  throw UnsupportedOperationException()
 
     // =============================== Search ===============================
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
@@ -115,8 +99,11 @@ class Animenix : DooPlay(
                     "/genero/${params.genre}"
                 }
             }
+
             params.language.isNotBlank() -> "/genero/${params.language}"
+
             params.year.isNotBlank() -> "/release/${params.year}"
+
             params.movie.isNotBlank() -> {
                 if (params.movie == "pelicula") {
                     "/pelicula"
@@ -124,6 +111,7 @@ class Animenix : DooPlay(
                     "/genero/${params.movie}"
                 }
             }
+
             else -> buildString {
                 append(
                     when {
@@ -199,13 +187,13 @@ class Animenix : DooPlay(
     // ============================= Utilities ==============================
     override fun String.toDate() = 0L
 
-    override fun List<Video>.sortVideos(): List<Video> {
+    override fun List<Video>.sort(): List<Video> {
         val quality = preferences.getString(prefQualityKey, prefQualityDefault)!!
         val lang = preferences.getString(PREF_LANG_KEY, PREF_LANG_DEFAULT)!!
         return sortedWith(
             compareBy(
-                { it.videoTitle.contains(lang) },
-                { it.videoTitle.contains(quality) },
+                { it.quality.contains(lang) },
+                { it.quality.contains(quality) },
             ),
         ).reversed()
     }

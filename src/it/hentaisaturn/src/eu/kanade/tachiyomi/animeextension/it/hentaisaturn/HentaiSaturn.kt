@@ -1,7 +1,5 @@
 package eu.kanade.tachiyomi.animeextension.it.hentaisaturn
 
-import android.app.Application
-import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
@@ -13,15 +11,16 @@ import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.getPreferencesLazy
 import okhttp3.Headers
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 
-class HentaiSaturn : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
+class HentaiSaturn :
+    ParsedAnimeHttpSource(),
+    ConfigurableAnimeSource {
 
     override val name = "HentaiSaturn"
 
@@ -31,9 +30,7 @@ class HentaiSaturn : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
 
     override val supportsLatest = true
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    private val preferences by getPreferencesLazy()
 
     override fun popularAnimeSelector(): String = "div.col-md-2.float-left.hentai-img-box-col.hentai-padding-top"
 
@@ -163,12 +160,10 @@ class HentaiSaturn : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
 
     private var filterSearch = false
 
-    override fun searchAnimeSelector(): String {
-        return if (filterSearch) {
-            "div.hentai-card-newhentai.main-hentai-card" // filter search
-        } else {
-            "div.item-archivio" // regular search
-        }
+    override fun searchAnimeSelector(): String = if (filterSearch) {
+        "div.hentai-card-newhentai.main-hentai-card" // filter search
+    } else {
+        "div.item-archivio" // regular search
     }
 
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
@@ -200,12 +195,15 @@ class HentaiSaturn : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
             description1 == null -> {
                 anime.description = description2
             }
+
             description2 == null -> {
                 anime.description = description1
             }
+
             description1.length > description2.length -> {
                 anime.description = description1
             }
+
             else -> {
                 anime.description = description2
             }
@@ -216,17 +214,17 @@ class HentaiSaturn : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
         return anime
     }
 
-    private fun parseStatus(statusString: String): Int {
-        return when {
-            statusString.contains("In corso") -> {
-                SAnime.ONGOING
-            }
-            statusString.contains("Finito") -> {
-                SAnime.COMPLETED
-            }
-            else -> {
-                SAnime.UNKNOWN
-            }
+    private fun parseStatus(statusString: String): Int = when {
+        statusString.contains("In corso") -> {
+            SAnime.ONGOING
+        }
+
+        statusString.contains("Finito") -> {
+            SAnime.COMPLETED
+        }
+
+        else -> {
+            SAnime.UNKNOWN
         }
     }
 
@@ -408,6 +406,7 @@ class HentaiSaturn : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
                         }
                     }
                 }
+
                 else -> {}
             }
         }

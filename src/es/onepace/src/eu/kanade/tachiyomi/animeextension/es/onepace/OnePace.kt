@@ -7,8 +7,6 @@ import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
-import eu.kanade.tachiyomi.animesource.model.FetchType
-import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -59,7 +57,6 @@ class OnePace :
                         } else {
                             null
                         }
-                    fetch_type = FetchType.Seasons
                 }
             }
         return AnimesPage(animeList.distinctBy { it.url }, false)
@@ -120,20 +117,18 @@ class OnePace :
         val episodes = mutableListOf<SEpisode>()
         val seen = mutableSetOf<String>()
 
-        fun normPath(rawUrl: String): String =
-            try {
-                val u = java.net.URL(rawUrl)
-                u.path.trimEnd('/')
-            } catch (e: Exception) {
-                rawUrl.substringAfter(baseUrl).substringBefore('?').trimEnd('/')
-            }
+        fun normPath(rawUrl: String): String = try {
+            val u = java.net.URL(rawUrl)
+            u.path.trimEnd('/')
+        } catch (e: Exception) {
+            rawUrl.substringAfter(baseUrl).substringBefore('?').trimEnd('/')
+        }
 
-        fun cleanEpisodeName(name: String): String =
-            name
-                .replace(Regex("\\[.*?\\]"), "")
-                .replace(".mp4", "")
-                .replace(".mkv", "")
-                .trim()
+        fun cleanEpisodeName(name: String): String = name
+            .replace(Regex("\\[.*?\\]"), "")
+            .replace(".mp4", "")
+            .replace(".mkv", "")
+            .trim()
 
         fun parseEpisodeNumber(name: String): Float {
             val cleanName = cleanEpisodeName(name)
@@ -313,102 +308,8 @@ class OnePace :
         return GET(url, headers = headersBuilder.build())
     }
 
-    // Seasons: group by quality found in Pixeldrain links (e.g., 480p, 720p, 1080p)
-    override fun seasonListRequest(anime: SAnime): Request {
-        val raw = anime.url.trimStart('#')
-        val arc = raw.substringBefore("?")
-        return GET("$baseUrl/$locale/watch", headers = Headers.headersOf("X-Arc", arc))
-    }
-
-    override suspend fun getSeasonList(anime: SAnime): List<SAnime> {
-        val request = seasonListRequest(anime)
-        return client.newCall(request).execute().use { seasonListParse(it) }
-    }
-
-    override fun seasonListParse(response: Response): List<SAnime> {
-        val document = response.asJsoup()
-        val arc = response.request.header("X-Arc") ?: ""
-        val block = if (arc.isNotBlank()) document.selectFirst("#$arc") else null
-
-        val src = block?.selectFirst("img")?.attr("src")
-        val meta = document.selectFirst("meta[property=og:image]")?.attr("content")
-        val arcThumb =
-            if (!src.isNullOrBlank()) {
-                if (src.startsWith("http")) src else "$baseUrl$src"
-            } else if (!meta.isNullOrBlank()) {
-                if (meta.startsWith("http")) meta else "$baseUrl$meta"
-            } else {
-                null
-            }
-
-        val seasons = mutableListOf<SAnime>()
-
-        block?.select("ul[aria-label='Watch options'] > li")?.forEach { li ->
-            var variantDesc =
-                li
-                    .text()
-                    // Drop all the "Pixeldrain: xxxp" appended at the end
-                    .replace(Regex("(?i)Pixeldrain:\\s*\\d{3,4}p"), "")
-                    .trim()
-
-            variantDesc =
-                variantDesc
-                    .replace("Subtitulos en español", "Sub")
-                    .replace("Doblaje al español", "Dub")
-                    .replace(" ,", ",")
-                    .trim(',', ' ')
-
-            variantDesc = variantDesc.replace(Regex("\\s+"), " ")
-            if (variantDesc.isBlank()) variantDesc = "Sub"
-
-            li.select("a[href*='pixeldrain']").forEach { a ->
-                val qMatch = Regex("(\\d{3,4}p)").find(a.text())?.groupValues?.get(1) ?: "Unknown"
-                val seasonTitle = "$variantDesc $qMatch"
-                val rawHref = a.attr("href")
-
-                seasons.add(
-                    SAnime.create().apply {
-                        title = seasonTitle
-                        setUrlWithoutDomain("$arc?pdurl=${java.net.URLEncoder.encode(rawHref, "UTF-8")}")
-                        fetch_type = FetchType.Episodes
-                        if (arcThumb != null) {
-                            thumbnail_url = arcThumb
-                        }
-                    },
-                )
-            }
-        }
-
-        if (seasons.isNotEmpty()) {
-            return seasons.distinctBy { it.url }.mapIndexed { idx, s ->
-                s.apply { season_number = (idx + 1).toDouble() }
-            }
-        }
-
-        // Fallback
-        val qualities =
-            block
-                ?.select("a[href*='pixeldrain']")
-                ?.mapNotNull { el ->
-                    Regex("(\\d{3,4}p)").find(el.text())?.groupValues?.get(1)
-                }?.distinct()
-                ?.sortedByDescending { it }
-
-        return qualities?.mapIndexed { idx, q ->
-            SAnime.create().apply {
-                title = q
-                setUrlWithoutDomain("$arc?q=$q")
-                fetch_type = FetchType.Episodes
-                season_number = (idx + 1).toDouble()
-                if (arcThumb != null) {
-                    thumbnail_url = arcThumb
-                }
-            }
-        } ?: emptyList()
-    }
-
-    // Hoster list and Videos: build a Hoster with videos from PixelDrain
-    override fun hosterListRequest(episode: SEpisode): Request {
+    // Videos: get videos from PixelDrain
+    override fun videoListRequest(episode: SEpisode): Request {
         var url = episode.url
         if (url.startsWith("/")) {
             url = "https://pixeldrain.net$url"
@@ -418,23 +319,13 @@ class OnePace :
         return GET(url)
     }
 
-    override fun hosterListParse(response: Response): List<Hoster> {
+    override fun videoListParse(response: Response): List<Video> {
         val url = response.request.url.toString()
-        val videos =
-            try {
-                pixelDrainExtractor.videosFromUrl(url, "PixelDrain ")
-            } catch (e: Exception) {
-                emptyList()
-            }
-        return listOf(Hoster(hosterName = "PixelDrain", videoList = videos))
-    }
-
-    override fun videoListParse(
-        response: Response,
-        hoster: Hoster,
-    ): List<Video> {
-        // In this implementation, hoster.videoList already contains the videos.
-        return hoster.videoList ?: emptyList()
+        return try {
+            pixelDrainExtractor.videosFromUrl(url, "PixelDrain ")
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     private val pixelDrainExtractor by lazy { PixelDrainExtractor(client) }

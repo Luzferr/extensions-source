@@ -1,9 +1,12 @@
 package eu.kanade.tachiyomi.animeextension.all.javgg
 
-import android.app.Application
-import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import aniyomi.lib.okruextractor.OkruExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
+import aniyomi.lib.vidhideextractor.VidHideExtractor
+import aniyomi.lib.voeextractor.VoeExtractor
+import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
@@ -11,21 +14,18 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
-import eu.kanade.tachiyomi.lib.okruextractor.OkruExtractor
-import eu.kanade.tachiyomi.lib.streamhidevidextractor.StreamHideVidExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
-import eu.kanade.tachiyomi.lib.voeextractor.VoeExtractor
-import eu.kanade.tachiyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
-import eu.kanade.tachiyomi.util.parallelCatchingFlatMapBlocking
+import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.parallelCatchingFlatMapBlocking
+import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 
-class Javgg : ConfigurableAnimeSource, AnimeHttpSource() {
+class Javgg :
+    AnimeHttpSource(),
+    ConfigurableAnimeSource {
 
     override val name = "JavGG"
 
@@ -35,9 +35,9 @@ class Javgg : ConfigurableAnimeSource, AnimeHttpSource() {
 
     override val supportsLatest = true
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    override val supportsRelatedAnimes = false
+
+    private val preferences by getPreferencesLazy()
 
     companion object {
         private const val PREF_QUALITY_KEY = "preferred_quality"
@@ -46,6 +46,17 @@ class Javgg : ConfigurableAnimeSource, AnimeHttpSource() {
 
         private const val PREF_SERVER_KEY = "preferred_server"
         private const val PREF_SERVER_DEFAULT = "StreamWish"
+
+        /**
+         * Current servers available on the site:
+         * TB: TurboPlay
+         * VH: VidHide
+         * MD: MixDrop
+         * SW: StreamWish
+         * VG: JavGuard
+         * VO: Voe
+         * upjav: upjav
+         */
         private val SERVER_LIST = arrayOf(
             "StreamWish",
             "Voe",
@@ -97,11 +108,9 @@ class Javgg : ConfigurableAnimeSource, AnimeHttpSource() {
 
     override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/new-post/page/$page", headers)
 
-    override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
-        return when {
-            query.isNotBlank() -> GET("$baseUrl/jav/page/$page?s=$query", headers)
-            else -> popularAnimeRequest(page)
-        }
+    override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request = when {
+        query.isNotBlank() -> GET("$baseUrl/jav/page/$page?s=$query", headers)
+        else -> popularAnimeRequest(page)
     }
 
     override fun searchAnimeParse(response: Response): AnimesPage {
@@ -116,6 +125,23 @@ class Javgg : ConfigurableAnimeSource, AnimeHttpSource() {
             }
         }
         return AnimesPage(animeList, nextPage)
+    }
+
+    override fun String.stripKeywordForRelatedAnimes(): List<String> {
+        val regexWhitespace = Regex("\\s+")
+        val regexSpecialCharacters =
+            Regex("([-!~#$%^&*+_|/\\\\,?:;'“”‘’\"<>(){}\\[\\]。・～：—！？、―«»《》〘〙【】「」｜]|\\s-|-\\s|\\s\\.|\\.\\s)")
+        val regexNumberOnly = Regex("^\\d+$")
+
+        return replace(regexSpecialCharacters, " ")
+            .split(regexWhitespace)
+            .map {
+                // remove number only
+                it.replace(regexNumberOnly, "")
+                    .lowercase()
+            }
+            // exclude single character
+            .filter { it.length > 1 }
     }
 
     override fun episodeListParse(response: Response): List<SEpisode> {
@@ -137,7 +163,7 @@ class Javgg : ConfigurableAnimeSource, AnimeHttpSource() {
         val document = response.asJsoup()
         return document.select("[id*=source-player] iframe").parallelCatchingFlatMapBlocking {
             val numOpt = it.closest(".source-box")?.attr("id")?.replace("source-player-", "")
-            val serverName = document.select("[data-nume=\"$numOpt\"] .server").text()
+            val serverName = document.select("[data-nume=\"$numOpt\"] .server").attr("data-text")
             serverVideoResolver(serverName, it.attr("src"))
         }
     }
@@ -146,7 +172,9 @@ class Javgg : ConfigurableAnimeSource, AnimeHttpSource() {
         val embedUrl = server.lowercase()
         return when {
             embedUrl.contains("ok.ru") || embedUrl.contains("okru") -> OkruExtractor(client).videosFromUrl(url)
+
             embedUrl.contains("filelions") || embedUrl.contains("lion") -> StreamWishExtractor(client, headers).videosFromUrl(url, videoNameGen = { "FileLions:$it" })
+
             embedUrl.contains("wishembed") || embedUrl.contains("streamwish") || embedUrl.contains("strwish") || embedUrl.contains("wish") -> {
                 val docHeaders = headers.newBuilder()
                     .add("Origin", "https://streamwish.to")
@@ -154,9 +182,13 @@ class Javgg : ConfigurableAnimeSource, AnimeHttpSource() {
                     .build()
                 StreamWishExtractor(client, docHeaders).videosFromUrl(url, videoNameGen = { "StreamWish:$it" })
             }
-            embedUrl.contains("vidhide") || embedUrl.contains("streamhide") || embedUrl.contains("guccihide") || embedUrl.contains("streamvid") -> StreamHideVidExtractor(client, headers).videosFromUrl(url)
+
+            embedUrl.contains("vidhide") || embedUrl.contains("streamhide") || embedUrl.contains("guccihide") || embedUrl.contains("streamvid") -> runBlocking { VidHideExtractor(client, headers).videosFromUrl(url) }
+
             embedUrl.contains("voe") -> VoeExtractor(client, headers).videosFromUrl(url)
+
             embedUrl.contains("yourupload") || embedUrl.contains("upload") -> YourUploadExtractor(client).videoFromUrl(url, headers = headers)
+
             embedUrl.contains("turboplay") -> {
                 val turboDocument = client.newCall(GET(url)).execute().asJsoup()
                 val masterUrl = turboDocument.select("#video_player").attr("data-hash")
@@ -168,12 +200,13 @@ class Javgg : ConfigurableAnimeSource, AnimeHttpSource() {
 
                 listOf(Video(masterUrl, "TurboPlay", masterUrl, customHeaders))
             }
+
             else -> emptyList()
         }
     }
 
     private fun org.jsoup.nodes.Element.getImageUrl(): String? {
-        val imageLinkRegex = """https?://[^\s]+\.(jpg|png)""".toRegex()
+        val imageLinkRegex = """https?://\S+\.(jpg|png)""".toRegex()
 
         for (link in this.select("[href], [src]")) {
             val href = link.attr("href")

@@ -1,7 +1,5 @@
 package eu.kanade.tachiyomi.animeextension.all.shabakatycinemana
 
-import android.app.Application
-import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
@@ -14,7 +12,8 @@ import eu.kanade.tachiyomi.animesource.model.Track
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.util.parseAs
+import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.parseAs
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
@@ -29,20 +28,14 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
-inline fun <reified T> Response.asModel(deserializer: DeserializationStrategy<T>): T {
-    return Json.decodeFromString(deserializer, this.body.string())
-}
+inline fun <reified T> Response.asModel(deserializer: DeserializationStrategy<T>): T = Json.decodeFromString(deserializer, this.body.string())
 
-inline fun <reified T> Response.asModelList(deserializer: DeserializationStrategy<T>): List<T> {
-    return Json.parseToJsonElement(this.body.string()).jsonArray.map {
-        Json.decodeFromJsonElement(deserializer, it)
-    }
+inline fun <reified T> Response.asModelList(deserializer: DeserializationStrategy<T>): List<T> = Json.parseToJsonElement(this.body.string()).jsonArray.map {
+    Json.decodeFromJsonElement(deserializer, it)
 }
 
 object SEpisodeDeserializer : DeserializationStrategy<SEpisode> {
@@ -168,7 +161,9 @@ object SAnimeDeserializer : DeserializationStrategy<SAnime> {
     }
 }
 
-class ShabakatyCinemana : ConfigurableAnimeSource, AnimeHttpSource() {
+class ShabakatyCinemana :
+    AnimeHttpSource(),
+    ConfigurableAnimeSource {
 
     override val name = "Shabakaty Cinemana"
 
@@ -180,9 +175,7 @@ class ShabakatyCinemana : ConfigurableAnimeSource, AnimeHttpSource() {
 
     override val supportsLatest = true
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    private val preferences by getPreferencesLazy()
 
     companion object {
         private const val IS_BROWSING_FILTER_NAME = "Browse"
@@ -342,11 +335,9 @@ class ShabakatyCinemana : ConfigurableAnimeSource, AnimeHttpSource() {
         }
     }
 
-    override fun searchAnimeParse(response: Response) =
-        throw UnsupportedOperationException("Not used.")
+    override fun searchAnimeParse(response: Response) = throw UnsupportedOperationException("Not used.")
 
-    override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList) =
-        throw UnsupportedOperationException("Not used.")
+    override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList) = throw UnsupportedOperationException("Not used.")
 
     override suspend fun getEpisodeList(anime: SAnime): List<SEpisode> {
         val episodeList = super.getEpisodeList(anime)
@@ -404,25 +395,23 @@ class ShabakatyCinemana : ConfigurableAnimeSource, AnimeHttpSource() {
         ).reversed()
     }
 
-    private open class SingleSelectFilter(displayName: String, val vals: Array<Pair<String, Int>>, default: Int = 0) :
-        AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray(), default) {
+    private open class SingleSelectFilter(displayName: String, val vals: Array<Pair<String, Int>>, default: Int = 0) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray(), default) {
         fun getNameValue() = vals[state].first.lowercase()
         fun getNumberValue() = vals[state].second
     }
 
-    private open class MultipleSelectFilter(displayName: String, vals: Array<Pair<String, Int>>) :
-        AnimeFilter.Group<CheckBoxFilter>(displayName, vals.map { CheckBoxFilter(it.first, false, it.second) }) {
-        fun getSelectedIds(): List<Int> =
-            this.state.filter { it.state }.map { it.value }
+    private open class MultipleSelectFilter(displayName: String, vals: Array<Pair<String, Int>>) : AnimeFilter.Group<CheckBoxFilter>(displayName, vals.map { CheckBoxFilter(it.first, false, it.second) }) {
+        fun getSelectedIds(): List<Int> = this.state.filter { it.state }.map { it.value }
         fun hasSelected(): Boolean = this.state.any { it.state }
     }
 
     private open class CheckBoxFilter(displayName: String, default: Boolean, val value: Int = 0) : AnimeFilter.CheckBox(displayName, default)
 
-    private open class YearFilter(displayName: String, years: Pair<YearTextFilter, YearTextFilter>) : AnimeFilter.Group<YearTextFilter>(
-        displayName,
-        years.toList(),
-    ) {
+    private open class YearFilter(displayName: String, years: Pair<YearTextFilter, YearTextFilter>) :
+        AnimeFilter.Group<YearTextFilter>(
+            displayName,
+            years.toList(),
+        ) {
         fun getFormatted(): String = this.state.map {
             it.state.ifBlank { it.default }
         }.joinToString(",")

@@ -1,8 +1,23 @@
 plugins {
-    id("lib-kotlin")
+    id("lib-android")
 }
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+android {
+    sourceSets.named("test") {
+        java.directories.clear()
+        java.directories.add("test/java")
+        kotlin.directories.clear()
+        kotlin.directories.add("test/kotlin")
+    }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = false
+        }
+    }
+}
+
+dependencies {
+    testImplementation(kotlin("stdlib"))
+    testImplementation(kotlin("test-junit"))
 }

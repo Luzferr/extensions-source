@@ -1,9 +1,12 @@
 package eu.kanade.tachiyomi.animeextension.es.animelatinohd
 
-import android.app.Application
-import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import aniyomi.lib.doodextractor.DoodExtractor
+import aniyomi.lib.filemoonextractor.FilemoonExtractor
+import aniyomi.lib.okruextractor.OkruExtractor
+import aniyomi.lib.streamtapeextractor.StreamTapeExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
 import eu.kanade.tachiyomi.animeextension.es.animelatinohd.extractors.SolidFilesExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
@@ -14,13 +17,9 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
-import eu.kanade.tachiyomi.lib.doodextractor.DoodExtractor
-import eu.kanade.tachiyomi.lib.filemoonextractor.FilemoonExtractor
-import eu.kanade.tachiyomi.lib.okruextractor.OkruExtractor
-import eu.kanade.tachiyomi.lib.streamtapeextractor.StreamTapeExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -31,13 +30,12 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 
 class AnimeLatinoHD :
     AnimeHttpSource(),
     ConfigurableAnimeSource {
+
     override val name = "AnimeLatinoHD"
 
     override val baseUrl = "https://www.animelatinohd.com"
@@ -48,9 +46,7 @@ class AnimeLatinoHD :
 
     private val json: Json by injectLazy()
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    private val preferences by getPreferencesLazy()
 
     companion object {
         const val PREF_QUALITY_KEY = "preferred_quality"
@@ -145,11 +141,7 @@ class AnimeLatinoHD :
                 val data = pageProps["data"]!!.jsonObject
 
                 newAnime.title = data["name"]!!.jsonPrimitive.content
-                newAnime.genre =
-                    data["genres"]!!
-                        .jsonPrimitive.content
-                        .split(",")
-                        .joinToString()
+                newAnime.genre = data["genres"]!!.jsonPrimitive.content.split(",").joinToString()
                 newAnime.description = data["overview"]!!.jsonPrimitive.content
                 newAnime.status = parseStatus(data["status"]!!.jsonPrimitive.content)
                 newAnime.thumbnail_url = "https://image.tmdb.org/t/p/w600_and_h900_bestv2${data["poster"]!!.jsonPrimitive.content}"
@@ -172,29 +164,9 @@ class AnimeLatinoHD :
                 arrEpisode.forEach { item ->
                     val animeItem = item.jsonObject
                     val episode = SEpisode.create()
-                    episode.setUrlWithoutDomain(
-                        externalOrInternalImg(
-                            "ver/${data["slug"]!!.jsonPrimitive.content}/${animeItem["number"]!!.jsonPrimitive.content.toFloat()}",
-                        ),
-                    )
+                    episode.setUrlWithoutDomain(externalOrInternalImg("ver/${data["slug"]!!.jsonPrimitive.content}/${animeItem["number"]!!.jsonPrimitive.content.toFloat()}"))
                     episode.episode_number = animeItem["number"]!!.jsonPrimitive.content.toFloat()
                     episode.name = "Episodio ${animeItem["number"]!!.jsonPrimitive.content.toFloat()}"
-
-                    // Intentar obtener la imagen del episodio
-                    val stillPath =
-                        animeItem["image"]?.jsonPrimitive?.content
-                            ?: animeItem["still_path"]?.jsonPrimitive?.content
-                    stillPath?.let {
-                        if (it.isNotBlank()) {
-                            episode.preview_url =
-                                if (it.startsWith("http")) {
-                                    it
-                                } else {
-                                    "https://image.tmdb.org/t/p/w300$it"
-                                }
-                        }
-                    }
-
                     episodeList.add(episode)
                 }
             }
@@ -231,20 +203,16 @@ class AnimeLatinoHD :
                     val servers = player.jsonArray
                     servers.forEach { server ->
                         val item = server.jsonObject
-                        val request =
-                            client
-                                .newCall(
-                                    GET(
-                                        url = "https://api.animelatinohd.com/stream/${item["id"]!!.jsonPrimitive.content}",
-                                        headers =
-                                            headers
-                                                .newBuilder()
-                                                .add("Referer", "https://www.animelatinohd.com/")
-                                                .add("authority", "api.animelatinohd.com")
-                                                .add("upgrade-insecure-requests", "1")
-                                                .build(),
-                                    ),
-                                ).execute()
+                        val request = client.newCall(
+                            GET(
+                                url = "https://api.animelatinohd.com/stream/${item["id"]!!.jsonPrimitive.content}",
+                                headers = headers.newBuilder()
+                                    .add("Referer", "https://www.animelatinohd.com/")
+                                    .add("authority", "api.animelatinohd.com")
+                                    .add("upgrade-insecure-requests", "1")
+                                    .build(),
+                            ),
+                        ).execute()
                         val locationsDdh = request.networkResponse.toString()
                         fetchUrls(locationsDdh).map { url ->
                             val language = if (item["languaje"]!!.jsonPrimitive.content == "1") "[LAT]" else "[SUB]"
@@ -465,21 +433,17 @@ class AnimeLatinoHD :
             ),
         )
 
-    private open class UriPartFilter(
-        displayName: String,
-        val vals: Array<Pair<String, String>>,
-    ) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
+    private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
         fun toUriPart() = vals[state].second
     }
 
     private fun externalOrInternalImg(url: String) = if (url.contains("https")) url else "$baseUrl/$url"
 
-    private fun parseStatus(statusString: String): Int =
-        when {
-            statusString.contains("1") -> SAnime.ONGOING
-            statusString.contains("0") -> SAnime.COMPLETED
-            else -> SAnime.UNKNOWN
-        }
+    private fun parseStatus(statusString: String): Int = when {
+        statusString.contains("1") -> SAnime.ONGOING
+        statusString.contains("0") -> SAnime.COMPLETED
+        else -> SAnime.UNKNOWN
+    }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         ListPreference(screen.context)

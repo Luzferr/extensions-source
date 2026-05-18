@@ -1,32 +1,32 @@
 package eu.kanade.tachiyomi.animeextension.es.detodopeliculas
 
-import android.net.Uri
-import android.util.Base64
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
+import aniyomi.lib.uqloadextractor.UqloadExtractor
+import aniyomi.lib.vidguardextractor.VidGuardExtractor
+import aniyomi.lib.vidhideextractor.VidHideExtractor
+import aniyomi.lib.voeextractor.VoeExtractor
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.lib.streamhidevidextractor.StreamHideVidExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
-import eu.kanade.tachiyomi.lib.uqloadextractor.UqloadExtractor
-import eu.kanade.tachiyomi.lib.vidguardextractor.VidGuardExtractor
-import eu.kanade.tachiyomi.lib.voeextractor.VoeExtractor
 import eu.kanade.tachiyomi.multisrc.dooplay.DooPlay
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
+import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.util.asJsoup
-import eu.kanade.tachiyomi.util.parallelFlatMapBlocking
+import keiyoushi.utils.bodyString
+import keiyoushi.utils.parallelCatchingFlatMapBlocking
 import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
-class DeTodoPeliculas : DooPlay(
-    "es",
-    "DeTodo Peliculas",
-    "https://detodopeliculas.nu",
-) {
+class DeTodoPeliculas :
+    DooPlay(
+        "es",
+        "DeTodo Peliculas",
+        "https://detodopeliculas.nu",
+    ) {
 // ============================== Popular ===============================
     override fun popularAnimeRequest(page: Int) = GET("$baseUrl/novedades/page/$page")
 
@@ -45,186 +45,56 @@ class DeTodoPeliculas : DooPlay(
 
     private val uqloadExtractor by lazy { UqloadExtractor(client) }
     private val streamWishExtractor by lazy { StreamWishExtractor(client, headers) }
-    private val streamHideVidExtractor by lazy { StreamHideVidExtractor(client, headers) }
+    private val vidHideExtractor by lazy { VidHideExtractor(client, headers) }
     private val vidGuardExtractor by lazy { VidGuardExtractor(client) }
     private val voeExtractor by lazy { VoeExtractor(client, headers) }
 
 // ============================ Video Links =============================
     override fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
-        val referer = response.request.url.toString()
         val players = document.select("ul#playeroptionsul li")
-        if (players.isEmpty()) return emptyList()
-
-        return players.parallelFlatMapBlocking { player ->
-            val flagSrc = sequenceOf(
-                player.selectFirst("span.flag img")?.attr("data-lazy-src"),
-                player.selectFirst("span.flag img")?.attr("src"),
-            ).firstOrNull { !it.isNullOrBlank() }.orEmpty()
-
+        return players.parallelCatchingFlatMapBlocking { player ->
+            val flagSrc = player.selectFirst("span.flag img")?.attr("data-lazy-src") ?: ""
             val lang = when {
-                "sub" in flagSrc.lowercase() -> "[SUB]"
-                "cas" in flagSrc.lowercase() -> "[CAST]"
-                "lat" in flagSrc.lowercase() -> "[LAT]"
+                "sub.png" in flagSrc -> "[SUB]"
+                "cas.png" in flagSrc -> "[CAST]"
+                "lat.png" in flagSrc -> "[LAT]"
                 else -> "UNKNOWN"
             }
-
-            val url = getPlayerUrl(player, referer) ?: return@parallelFlatMapBlocking emptyList<Video>()
-            extractVideos(url, lang, referer)
+            val url = getPlayerUrl(player)
+                ?: return@parallelCatchingFlatMapBlocking emptyList()
+            extractVideos(url, lang)
         }
     }
 
-    private fun extractVideos(url: String, lang: String, referer: String, depth: Int = 0): List<Video> {
-        if (depth >= 3) return emptyList()
-
-        val normalized = normalizeUrl(url)
-        // url log
-
-        if (normalized.startsWith("$baseUrl/player")) {
-            val decodedUrl = Uri.parse(normalized).getQueryParameter("id")
-                ?.let { decodeBase64Url(it) ?: it }
-                ?.let(::normalizeUrl)
-                ?.takeIf { it.isNotBlank() }
-
-            if (decodedUrl != null && decodedUrl != normalized) {
-                return extractVideos(decodedUrl, lang, normalized, depth + 1)
-            }
-        }
-
-        if (normalized.contains("trembed")) {
-            val embedHeaders = headers.newBuilder()
-                .add("Referer", referer)
-                .add("Origin", baseUrl)
-                .build()
-
-            val embedBody = runCatching {
-                client.newCall(GET(normalized, embedHeaders)).execute().use { response ->
-                    if (!response.isSuccessful) "" else response.body.string()
-                }
-            }.getOrDefault("")
-
-            if (embedBody.isBlank()) return emptyList()
-
-            val iframeUrl = Jsoup.parse(embedBody)
-                .selectFirst("iframe[src], iframe[data-src], iframe[data-lazy-src]")
-                ?.let { element ->
-                    sequenceOf("src", "data-src", "data-lazy-src")
-                        .map(element::attr)
-                        .firstOrNull { it.isNotBlank() }
-                }
-                ?.let(::normalizeUrl)
-                ?.takeIf { it.isNotBlank() }
-                ?: return emptyList()
-
-            return extractVideos(iframeUrl, lang, referer, depth + 1)
-        }
-        val vidHideDomains = listOf("vidhide", "vidhidepro", "luluvdo", "vidhideplus")
-
-        return runCatching {
-            vidHideDomains.firstOrNull { normalized.contains(it, ignoreCase = true) }
-                ?.let { domain ->
-                    streamHideVidExtractor.videosFromUrl(
-                        normalized,
-                        videoNameGen = { "$lang - ${domain.uppercase()} : $it" },
-                    )
-                }
-                ?: when {
-                    "uqload" in normalized -> uqloadExtractor.videosFromUrl(normalized, "$lang - ")
-                    listOf("streamwish", "strwish", "wishembed").any { normalized.contains(it) } -> streamWishExtractor.videosFromUrl(normalized, "$lang - ")
-                    listOf("vidguard", "listeamed", "guard", "listeam").any { normalized.contains(it) } -> vidGuardExtractor.videosFromUrl(normalized, "$lang - ")
-                    "voe" in normalized -> voeExtractor.videosFromUrl(normalized, "$lang - ")
-                    else -> emptyList()
-                }
-        }.getOrElse {
-            it.printStackTrace()
-            emptyList()
+    private suspend fun extractVideos(url: String, lang: String): List<Video> {
+        val vidHideDomains = listOf("vidhide", "VidHidePro", "luluvdo", "vidhideplus")
+        val vidHideDomain = vidHideDomains.firstOrNull { it in url }
+        return when {
+            vidHideDomain != null -> vidHideExtractor.videosFromUrl(url, videoNameGen = { "$lang - $vidHideDomain : $it" })
+            "uqload" in url -> uqloadExtractor.videosFromUrl(url, "$lang - ")
+            "strwish" in url -> streamWishExtractor.videosFromUrl(url, "$lang - ")
+            "vidguard" in url || "listeamed" in url -> vidGuardExtractor.videosFromUrl(url, "$lang - ")
+            "voe" in url -> voeExtractor.videosFromUrl(url, "$lang - ")
+            else -> emptyList()
         }
     }
 
-    private fun getPlayerUrl(player: Element, referer: String): String? {
-        val directCandidate = sequenceOf(
-            player.attr("data-option"),
-            player.attr("data-player"),
-            player.attr("data-src"),
-            player.attr("data-url"),
-            player.attr("data-video"),
-            player.selectFirst("a[href]")?.attr("href"),
-        ).firstOrNull { !it.isNullOrBlank() }
-
-        if (!directCandidate.isNullOrBlank()) {
-            return normalizeUrl(directCandidate)
-        }
-
-        val post = player.attr("data-post")
-        val nume = player.attr("data-nume")
-        val type = player.attr("data-type").ifBlank { "movie" }
-
-        if (post.isBlank() || nume.isBlank()) return null
-
-        val ajaxHeaders = headers.newBuilder()
-            .add("Referer", referer)
-            .add("Origin", baseUrl)
-            .add("X-Requested-With", "XMLHttpRequest")
-            .build()
-
+    private suspend fun getPlayerUrl(player: Element): String? {
         val body = FormBody.Builder()
             .add("action", "doo_player_ajax")
-            .add("post", post)
-            .add("nume", nume)
-            .add("type", type)
+            .add("post", player.attr("data-post"))
+            .add("nume", player.attr("data-nume"))
+            .add("type", player.attr("data-type"))
             .build()
 
-        val responseBody = client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", ajaxHeaders, body)).execute().use { response ->
-            response.body.string()
-        }
-
-        if (responseBody.isBlank()) return null
-
-        val embedByRegex = embedUrlRegex.find(responseBody)?.groupValues?.getOrNull(1)
-            ?.replace("\\/", "/")
-            ?.let(::normalizeUrl)
-            ?.takeIf { it.isNotBlank() }
-        if (embedByRegex != null) return embedByRegex
-
-        val iframe = Jsoup.parse(responseBody).selectFirst("iframe[src], iframe[data-src], iframe[data-lazy-src]")
-            ?.let { element ->
-                sequenceOf("src", "data-src", "data-lazy-src")
-                    .map(element::attr)
-                    .firstOrNull { it.isNotBlank() }
-            }
-            ?.let(::normalizeUrl)
-            ?.takeIf { it.isNotBlank() }
-        if (iframe != null) return iframe
-
-        val source = Jsoup.parse(responseBody).selectFirst("source[src]")?.attr("src")
-            ?.let(::normalizeUrl)
-            ?.takeIf { it.isNotBlank() }
-
-        return source
+        return client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", headers, body))
+            .awaitSuccess().bodyString()
+            .substringAfter("\"embed_url\":\"")
+            .substringBefore("\",")
+            .replace("\\", "")
+            .takeIf(String::isNotBlank)
     }
-
-    private fun normalizeUrl(url: String?): String {
-        if (url.isNullOrBlank()) return ""
-        val trimmed = url.trim()
-        return when {
-            trimmed.startsWith("//") -> "https:$trimmed"
-            trimmed.startsWith("/") -> "$baseUrl$trimmed"
-            else -> trimmed
-        }
-    }
-
-    private val embedUrlRegex = Regex("\"embed_url\"\\s*:\\s*\"([^\"]+)\"")
-
-    private fun decodeBase64Url(data: String): String? = runCatching {
-        val sanitized = data
-            .replace('-', '+')
-            .replace('_', '/')
-            .let { str ->
-                val padding = str.length % 4
-                if (padding == 0) str else str + "=".repeat(4 - padding)
-            }
-        String(Base64.decode(sanitized, Base64.DEFAULT), Charsets.UTF_8)
-    }.getOrNull()
 
 // ============================== Filters ===============================
     override val fetchGenres = false
@@ -241,6 +111,7 @@ class DeTodoPeliculas : DooPlay(
                     "/genero/${params.genre}"
                 }
             }
+
             else -> buildString {
                 append(
                     when {

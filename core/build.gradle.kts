@@ -1,25 +1,31 @@
 plugins {
     id("com.android.library")
+    id("keiyoushi.lint")
 }
 
 android {
     compileSdk = AndroidConfig.compileSdk
-    namespace = AndroidConfig.coreNamespace
 
     defaultConfig {
         minSdk = AndroidConfig.minSdk
     }
 
-    sourceSets {
-        named("main") {
-            manifest.srcFile("AndroidManifest.xml")
-            res.setSrcDirs(listOf("res"))
-        }
-    }
+    namespace = "keiyoushi.core"
 
-    libraryVariants.all {
-        generateBuildConfigProvider?.configure {
-            enabled = false
-        }
+    buildFeatures {
+        resValues = false
+        shaders = false
     }
+}
+
+kotlin {
+    compilerOptions {
+        freeCompilerArgs.add("-opt-in=kotlinx.serialization.ExperimentalSerializationApi")
+    }
+}
+
+dependencies {
+    compileOnly(versionCatalogs.named("libs").findBundle("common").get())
+    testImplementation(libs.okhttp)
+    testImplementation(kotlin("test-junit"))
 }

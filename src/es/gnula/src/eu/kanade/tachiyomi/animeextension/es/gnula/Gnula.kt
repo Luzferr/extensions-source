@@ -1,10 +1,22 @@
 package eu.kanade.tachiyomi.animeextension.es.gnula
 
-import android.app.Application
-import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
-import androidx.preference.SwitchPreferenceCompat
+import aniyomi.lib.burstcloudextractor.BurstCloudExtractor
+import aniyomi.lib.doodextractor.DoodExtractor
+import aniyomi.lib.fastreamextractor.FastreamExtractor
+import aniyomi.lib.filemoonextractor.FilemoonExtractor
+import aniyomi.lib.mp4uploadextractor.Mp4uploadExtractor
+import aniyomi.lib.okruextractor.OkruExtractor
+import aniyomi.lib.streamlareextractor.StreamlareExtractor
+import aniyomi.lib.streamtapeextractor.StreamTapeExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
+import aniyomi.lib.universalextractor.UniversalExtractor
+import aniyomi.lib.upstreamextractor.UpstreamExtractor
+import aniyomi.lib.uqloadextractor.UqloadExtractor
+import aniyomi.lib.vidhideextractor.VidHideExtractor
+import aniyomi.lib.voeextractor.VoeExtractor
+import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
@@ -14,27 +26,14 @@ import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
-import eu.kanade.tachiyomi.lib.burstcloudextractor.BurstCloudExtractor
-import eu.kanade.tachiyomi.lib.doodextractor.DoodExtractor
-import eu.kanade.tachiyomi.lib.fastreamextractor.FastreamExtractor
-import eu.kanade.tachiyomi.lib.filemoonextractor.FilemoonExtractor
-import eu.kanade.tachiyomi.lib.mp4uploadextractor.Mp4uploadExtractor
-import eu.kanade.tachiyomi.lib.okruextractor.OkruExtractor
-import eu.kanade.tachiyomi.lib.streamlareextractor.StreamlareExtractor
-import eu.kanade.tachiyomi.lib.streamsilkextractor.StreamSilkExtractor
-import eu.kanade.tachiyomi.lib.streamtapeextractor.StreamTapeExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
-import eu.kanade.tachiyomi.lib.universalextractor.UniversalExtractor
-import eu.kanade.tachiyomi.lib.upstreamextractor.UpstreamExtractor
-import eu.kanade.tachiyomi.lib.uqloadextractor.UqloadExtractor
-import eu.kanade.tachiyomi.lib.vidguardextractor.VidGuardExtractor
-import eu.kanade.tachiyomi.lib.vidhideextractor.VidHideExtractor
-import eu.kanade.tachiyomi.lib.voeextractor.VoeExtractor
-import eu.kanade.tachiyomi.lib.youruploadextractor.YourUploadExtractor
+import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.util.asJsoup
-import eu.kanade.tachiyomi.util.parallelCatchingFlatMapBlocking
+import keiyoushi.utils.catchingFlatMapBlocking
+import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.tryParse
+import keiyoushi.utils.useAsJsoup
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -44,14 +43,16 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import okhttp3.Request
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
+import java.util.Locale
 
 class Gnula :
-    AnimeHttpSource(),
+    ParsedAnimeHttpSource(),
     ConfigurableAnimeSource {
+
     override val name = "Gnula"
 
     override val baseUrl = "https://gnula.life"
@@ -62,9 +63,7 @@ class Gnula :
 
     private val json: Json by injectLazy()
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    private val preferences by getPreferencesLazy()
 
     companion object {
         const val PREF_QUALITY_KEY = "preferred_quality"
@@ -105,7 +104,7 @@ class Gnula :
         internal const val LEGACY_FETCH_TYPE_SEASONS = "1"
 
         private val DATE_FORMATTER by lazy {
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ENGLISH)
         }
 
         private val SERVER_DISPLAY_NAMES =
@@ -197,13 +196,23 @@ class Gnula :
                     setUrlWithoutDomain(episodeUrl.removePrefix(baseUrl))
                 },
             )
-        }
-
-        val selectedSeason =
-            response.request.url
-                .queryParameter("season")
-                ?.toIntOrNull()
-        return meta.toEpisodeList(baseUrl, selectedSeason)
+        } else {
+            val jsonString = document.selectFirst("script:containsData({\"props\":{\"pageProps\":)")?.data() ?: return emptyList()
+            val jsonData = jsonString.parseTo<SeasonModel>().props.pageProps
+            var episodeCounter = 1F
+            jsonData.post.seasons
+                .flatMap { season ->
+                    season.episodes.map { ep ->
+                        val episode = SEpisode.create().apply {
+                            episode_number = episodeCounter++
+                            name = "T${season.number} - E${ep.number} - ${ep.title}"
+                            date_upload = ep.releaseDate?.let(DATE_FORMATTER::tryParse) ?: 0L
+                            setUrlWithoutDomain("$baseUrl/series/${ep.slug.name}/seasons/${ep.slug.season}/episodes/${ep.slug.episode}")
+                        }
+                        episode
+                    }
+                }
+        }.reversed()
     }
 
     override suspend fun getSeasonList(anime: SAnime): List<SAnime> {
@@ -278,143 +287,54 @@ class Gnula :
             ).map { it.hoster }
     }
 
-    // --------------------------------Video extractors------------------------------------
-    private val voeExtractor by lazy { VoeExtractor(client, headers) }
-    private val okruExtractor by lazy { OkruExtractor(client) }
-    private val filemoonExtractor by lazy { FilemoonExtractor(client) }
-    private val uqloadExtractor by lazy { UqloadExtractor(client) }
-    private val mp4uploadExtractor by lazy { Mp4uploadExtractor(client) }
-    private val streamWishExtractor by lazy { StreamWishExtractor(client, headers) }
-    private val doodExtractor by lazy { DoodExtractor(client) }
-    private val streamlareExtractor by lazy { StreamlareExtractor(client) }
-    private val yourUploadExtractor by lazy { YourUploadExtractor(client) }
-    private val burstCloudExtractor by lazy { BurstCloudExtractor(client) }
-    private val fastreamExtractor by lazy { FastreamExtractor(client, headers) }
-    private val upstreamExtractor by lazy { UpstreamExtractor(client) }
-    private val streamTapeExtractor by lazy { StreamTapeExtractor(client) }
-    private val vidHideExtractor by lazy { VidHideExtractor(client, headers) }
-    private val streamSilkExtractor by lazy { StreamSilkExtractor(client) }
-    private val vidGuardExtractor by lazy { VidGuardExtractor(client) }
-    private val universalExtractor by lazy { UniversalExtractor(client) }
+    private suspend fun serverVideoResolver(url: String, prefix: String = ""): List<Video> {
+        val embedUrl = url.lowercase()
+        return when {
+            embedUrl.contains("voe") -> VoeExtractor(client, headers).videosFromUrl(url, prefix)
 
-    fun serverVideoResolver(
-        url: String,
-        prefix: String = "",
-        serverName: String? = "",
-    ): List<Video> {
-        return runCatching {
-            val source = serverName?.ifEmpty { url } ?: url
-            val matched = canonicalServerSlug(source)
-            val displayServer = displayServerName(matched)
-            val prefixBase = buildPrefix(prefix, displayServer)
-            val prefixWithSpace = prefixBase.withTrailingSpace()
-            when (matched) {
-                "voe" -> {
-                    voeExtractor.videosFromUrl(url, prefixWithSpace)
-                }
+            embedUrl.contains("ok.ru") || embedUrl.contains("okru") -> OkruExtractor(client).videosFromUrl(url, prefix)
 
-                "okru" -> {
-                    okruExtractor.videosFromUrl(url, prefixWithSpace)
-                }
-
-                "filemoon" -> {
-                    filemoonExtractor.videosFromUrl(url, prefix = prefixWithSpace)
-                }
-
-                "amazon" -> {
-                    val body = client.newCall(GET(url)).execute().asJsoup()
-                    return if (body.select("script:containsData(var shareId)").toString().isNotBlank()) {
-                        val shareId =
-                            body
-                                .selectFirst("script:containsData(var shareId)")!!
-                                .data()
-                                .substringAfter("shareId = \"")
-                                .substringBefore("\"")
-                        val amazonApiJson =
-                            client
-                                .newCall(
-                                    GET("https://www.amazon.com/drive/v1/shares/$shareId?resourceVersion=V2&ContentType=JSON&asset=ALL"),
-                                ).execute()
-                                .asJsoup()
-                        val epId = amazonApiJson.toString().substringAfter("\"id\":\"").substringBefore("\"")
-                        val amazonApi =
-                            client
-                                .newCall(
-                                    GET(
-                                        "https://www.amazon.com/drive/v1/nodes/$epId/children?resourceVersion=V2&ContentType=JSON&limit=200&sort=%5B%22kind+DESC%22%2C+%22modifiedDate+DESC%22%5D&asset=ALL&tempLink=true&shareId=$shareId",
-                                    ),
-                                ).execute()
-                                .asJsoup()
-                        val videoUrl =
-                            amazonApi
-                                .toString()
-                                .substringAfter(
-                                    "\"FOLDER\":",
-                                ).substringAfter("tempLink\":\"")
-                                .substringBefore("\"")
-                        listOf(Video(videoUrl = videoUrl, videoTitle = buildVideoName(prefixBase, "Amazon")))
-                    } else {
-                        emptyList()
-                    }
-                }
-
-                "uqload" -> {
-                    uqloadExtractor.videosFromUrl(url, prefixWithSpace)
-                }
-
-                "mp4upload" -> {
-                    mp4uploadExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
-                }
-
-                "streamwish" -> {
-                    streamWishExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
-                }
-
-                "doodstream" -> {
-                    doodExtractor.videosFromUrl(url, prefixWithSpace)
-                }
-
-                "streamlare" -> {
-                    streamlareExtractor.videosFromUrl(url, prefixWithSpace)
-                }
-
-                "yourupload" -> {
-                    yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = prefixWithSpace)
-                }
-
-                "burstcloud" -> {
-                    burstCloudExtractor.videoFromUrl(url, headers = headers, prefix = prefixWithSpace)
-                }
-
-                "fastream" -> {
-                    fastreamExtractor.videosFromUrl(url, prefix = prefixWithSpace)
-                }
-
-                "upstream" -> {
-                    upstreamExtractor.videosFromUrl(url, prefix = prefixWithSpace)
-                }
-
-                "streamsilk" -> {
-                    streamSilkExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
-                }
-
-                "streamtape" -> {
-                    streamTapeExtractor.videosFromUrl(url, quality = prefixBase)
-                }
-
-                "vidhide" -> {
-                    vidHideExtractor.videosFromUrl(url, videoNameGen = { quality -> buildVideoName(prefixBase, quality) })
-                }
-
-                "vidguard" -> {
-                    vidGuardExtractor.videosFromUrl(url, prefix = prefixWithSpace)
-                }
-
-                else -> {
-                    universalExtractor.videosFromUrl(url, headers, prefix = prefixWithSpace)
-                }
+            embedUrl.contains("filemoon") || embedUrl.contains("moonplayer") -> {
+                val vidHeaders = headers.newBuilder()
+                    .add("Origin", "https://${url.toHttpUrl().host}")
+                    .add("Referer", "https://${url.toHttpUrl().host}/")
+                    .build()
+                FilemoonExtractor(client).videosFromUrl(url, prefix = "$prefix Filemoon:", headers = vidHeaders)
             }
-        }.getOrNull() ?: emptyList()
+
+            embedUrl.contains("uqload") -> UqloadExtractor(client).videosFromUrl(url, prefix = prefix)
+
+            embedUrl.contains("mp4upload") -> Mp4uploadExtractor(client).videosFromUrl(url, headers, prefix = prefix)
+
+            embedUrl.contains("wishembed") || embedUrl.contains("streamwish") || embedUrl.contains("strwish") || embedUrl.contains("wish") -> {
+                val docHeaders = headers.newBuilder()
+                    .add("Origin", "https://streamwish.to")
+                    .add("Referer", "https://streamwish.to/")
+                    .build()
+                StreamWishExtractor(client, docHeaders).videosFromUrl(url, videoNameGen = { "$prefix StreamWish:$it" })
+            }
+
+            embedUrl.contains("doodstream") || embedUrl.contains("dood.") || embedUrl.contains("ds2play") || embedUrl.contains("doods.") -> {
+                val url2 = url.replace("https://doodstream.com/e/", "https://dood.to/e/")
+                listOf(DoodExtractor(client).videosFromUrl(url2, quality = prefix, redirect = false)).flatten()
+            }
+
+            embedUrl.contains("streamlare") -> StreamlareExtractor(client).videosFromUrl(url, prefix = prefix)
+
+            embedUrl.contains("yourupload") || embedUrl.contains("upload") -> YourUploadExtractor(client).videoFromUrl(url, headers = headers, prefix = prefix)
+
+            embedUrl.contains("burstcloud") || embedUrl.contains("burst") -> BurstCloudExtractor(client).videoFromUrl(url, headers = headers, prefix = prefix)
+
+            embedUrl.contains("fastream") -> FastreamExtractor(client, headers).videosFromUrl(url, prefix = "$prefix Fastream:")
+
+            embedUrl.contains("upstream") -> UpstreamExtractor(client).videosFromUrl(url, prefix = prefix)
+
+            embedUrl.contains("streamtape") || embedUrl.contains("stp") || embedUrl.contains("stape") -> listOf(StreamTapeExtractor(client).videoFromUrl(url, quality = "$prefix StreamTape")!!)
+
+            embedUrl.contains("ahvsh") || embedUrl.contains("streamhide") || embedUrl.contains("guccihide") || embedUrl.contains("streamvid") -> VidHideExtractor(client, headers).videosFromUrl(url, videoNameGen = { "$prefix StreamHideVid:$it" })
+
+            else -> UniversalExtractor(client).videosFromUrl(url, headers, prefix = prefix)
+        }
     }
 
     private val conventions =
@@ -553,29 +473,14 @@ class Gnula :
         }
     }
 
-    private fun JsonArray?.collectHosters(
-        languageTag: String,
-        hosterGroups: LinkedHashMap<Pair<String, String>, MutableList<Video>>,
-    ) {
-        val regions = this?.mapNotNull { it.jsonObjectOrNull() } ?: return
-
-        val entries =
-            regions.parallelCatchingFlatMapBlocking { region ->
-                val serverSlug = region.string("cyberlocker").orEmpty()
-                val videos = extractVideosFromRegion(region, languageTag, serverSlug)
-                if (videos.isEmpty()) {
-                    emptyList()
-                } else {
-                    listOf(HosterEntry(languageTag, serverSlug, videos))
-                }
-            }
-
-        entries.forEach { entry ->
-            val displayName = displayServerName(entry.serverSlug)
-            val key = entry.languageTag to displayName
-            val group = hosterGroups.getOrPut(key) { mutableListOf() }
-            group.addAll(entry.videos)
-        }
+    private fun List<Region>.toVideoList(lang: String): List<Video> = catchingFlatMapBlocking {
+        client.newCall(GET(it.result)).awaitSuccess().useAsJsoup().select("script")
+            .map { sc -> sc.data() }
+            .firstOrNull { data -> data.contains("var url = '") }
+            ?.let { data ->
+                val url = data.substringAfter("var url = '").substringBefore("';")
+                serverVideoResolver(url, lang)
+            } ?: emptyList()
     }
 
     private fun extractVideosFromRegion(
@@ -613,309 +518,6 @@ class Gnula :
         val videos: List<Video>,
     )
 
-    private data class HosterGroupMeta(
-        val index: Int,
-        val languageTag: String,
-        val serverDisplay: String,
-        val hoster: Hoster,
-    ) {
-        fun matchesLanguage(preferred: String): Int = if (languageTag == preferred) 1 else 0
-
-        fun matchesServer(preferred: String): Int = if (serverDisplay.equals(preferred, ignoreCase = true)) 1 else 0
-    }
-
-    private data class GnulaMeta(
-        val title: String,
-        val overview: String?,
-        val poster: String?,
-        val genres: List<String>,
-        val director: String?,
-        val cast: List<String>,
-        val seasons: List<GnulaSeason>,
-        val isMovie: Boolean,
-    )
-
-    private data class GnulaSeason(
-        val number: Int,
-        val title: String?,
-        val overview: String?,
-        val slugName: String?,
-        val slugSeason: String?,
-        val episodes: List<GnulaEpisode>,
-    )
-
-    private data class GnulaEpisode(
-        val season: Int,
-        val number: Int,
-        val title: String?,
-        val overview: String?,
-        val image: String?,
-        val releaseDate: String?,
-        val slugName: String,
-        val slugSeason: String,
-        val slugEpisode: String,
-    )
-
-    private data class GnulaEpisodeBundle(
-        val seasonNumber: Int,
-        val episode: GnulaEpisode,
-    )
-
-    private fun displayServerName(serverSlug: String): String {
-        val canonical = canonicalServerSlug(serverSlug)
-        if (canonical.isBlank()) return "Unknown"
-
-        return SERVER_DISPLAY_NAMES[canonical] ?: canonical.replaceFirstChar { char ->
-            if (char.isLowerCase()) char.titlecase() else char.toString()
-        }
-    }
-
-    private fun canonicalServerSlug(serverSlug: String): String {
-        val lower = serverSlug.lowercase()
-        return conventions
-            .firstOrNull { (key, names) ->
-                key.equals(lower, true) ||
-                    lower.contains(key, ignoreCase = true) ||
-                    names.any { name ->
-                        name.equals(lower, true) || lower.contains(name, true)
-                    }
-            }?.first ?: lower
-    }
-
-    private fun Response.extractPageProps(): JsonObject? {
-        val document = asJsoup()
-        val jsonString = document.selectFirst("script:containsData({\"props\":{\"pageProps\":)")?.data() ?: return null
-        val root = runCatching { json.parseToJsonElement(jsonString).jsonObject }.getOrNull() ?: return null
-        return root.obj("props")?.obj("pageProps")
-    }
-
-    private fun JsonObject.toGnulaMeta(): GnulaMeta? {
-        val post = obj("post") ?: return null
-        val title = post.obj("titles")?.string("name") ?: return null
-        val overview = post.string("overview")
-        val poster = post.obj("images")?.string("poster")?.optimizeImageUrl()
-        val genres =
-            post
-                .array("genres")
-                ?.mapNotNull { element ->
-                    element
-                        .jsonObjectOrNull()
-                        ?.string("name")
-                        ?.takeIf { it.isNotBlank() }
-                }
-                ?: emptyList()
-        val director = post.string("director")
-        val cast =
-            post
-                .obj("cast")
-                ?.array("acting")
-                ?.mapNotNull { element ->
-                    element
-                        .jsonObjectOrNull()
-                        ?.string("name")
-                        ?.takeIf { it.isNotBlank() }
-                }
-                ?: emptyList()
-        val seasons =
-            post
-                .array("seasons")
-                ?.mapNotNull { element ->
-                    element.jsonObjectOrNull()?.toGnulaSeason(overview)
-                }
-                ?: emptyList()
-        val isMovie = post.string("type")?.equals("movie", true) == true || seasons.isEmpty()
-
-        return GnulaMeta(
-            title = title,
-            overview = overview,
-            poster = poster,
-            genres = genres,
-            director = director,
-            cast = cast,
-            seasons = seasons,
-            isMovie = isMovie,
-        )
-    }
-
-    private fun JsonObject.toGnulaSeason(seriesOverview: String?): GnulaSeason? {
-        val number = long("number")?.toInt() ?: return null
-        val title = string("title")
-        val overview = string("overview") ?: seriesOverview
-        val slug = obj("slug")
-        val slugName = slug?.string("name")
-        val slugSeason = slug?.string("season")
-        val episodes =
-            array("episodes")
-                ?.mapIndexedNotNull { index, element ->
-                    element.jsonObjectOrNull()?.toGnulaEpisode(number, index + 1)
-                }
-                ?: emptyList()
-
-        return GnulaSeason(
-            number = number,
-            title = title,
-            overview = overview,
-            slugName = slugName,
-            slugSeason = slugSeason,
-            episodes = episodes,
-        )
-    }
-
-    private fun JsonObject.toGnulaEpisode(
-        seasonNumber: Int,
-        fallbackNumber: Int,
-    ): GnulaEpisode? {
-        val slug = obj("slug") ?: return null
-        val slugName = slug.string("name") ?: return null
-        val slugSeason = slug.string("season") ?: seasonNumber.toString()
-        val slugEpisode = slug.string("episode") ?: return null
-        val episodeNumber =
-            long("number")?.toInt()
-                ?: slugEpisode.filter(Char::isDigit).toIntOrNull()
-                ?: fallbackNumber
-        val title = string("title")
-        val overview = string("overview") ?: string("description")
-        val image = string("image")?.optimizeImageUrl()
-        val releaseDate = string("releaseDate")
-
-        return GnulaEpisode(
-            season = seasonNumber,
-            number = episodeNumber,
-            title = title,
-            overview = overview,
-            image = image,
-            releaseDate = releaseDate,
-            slugName = slugName,
-            slugSeason = slugSeason,
-            slugEpisode = slugEpisode,
-        )
-    }
-
-    private fun GnulaSeason.toSAnime(
-        baseUrlPath: String,
-        meta: GnulaMeta,
-        sourceBaseUrl: String,
-    ): SAnime {
-        val normalizedNumber =
-            slugSeason
-                ?.filter(Char::isDigit)
-                ?.toIntOrNull()
-                ?.takeIf { it > 0 }
-                ?: number.takeIf { it > 0 }
-                ?: 1
-        val resolvedTitle =
-            title?.takeIf { it.isNotBlank() }
-                ?: when {
-                    meta.title.isNotBlank() -> "${meta.title} - Temporada $normalizedNumber"
-                    else -> "Temporada $normalizedNumber"
-                }
-        val seasonDescription = overview ?: meta.overview
-
-        return SAnime.create().apply {
-            title = resolvedTitle
-            seasonDescription?.takeIf { it.isNotBlank() }?.let { description = it }
-            thumbnail_url = meta.poster
-            fetch_type = FetchType.Episodes
-            season_number = normalizedNumber.toDouble()
-            meta.genres
-                .takeIf { it.isNotEmpty() }
-                ?.joinToString(", ")
-                ?.let { genre = it }
-            meta.director?.takeIf { it.isNotBlank() }?.let { author = it }
-            meta.cast
-                .firstOrNull()
-                ?.takeIf { it.isNotBlank() }
-                ?.let { artist = it }
-            status = if (meta.isMovie) SAnime.COMPLETED else SAnime.UNKNOWN
-
-            setUrlWithoutDomain(buildSeasonUrl(sourceBaseUrl, baseUrlPath, normalizedNumber))
-        }
-    }
-
-    private fun GnulaMeta.toEpisodeList(
-        baseUrl: String,
-        selectedSeason: Int?,
-    ): List<SEpisode> {
-        val seasonsToUse = seasons.filter { selectedSeason == null || it.number == selectedSeason }
-        if (seasonsToUse.isEmpty()) return emptyList()
-
-        val singleSeason = seasonsToUse.size == 1
-
-        return seasonsToUse
-            .flatMap { season ->
-                season.episodes.map { episode ->
-                    GnulaEpisodeBundle(season.number, episode)
-                }
-            }.sortedWith(compareBy({ it.seasonNumber }, { it.episode.number }))
-            .reversed()
-            .map { bundle ->
-                val episode = bundle.episode
-                val episodeNumberValue =
-                    if (singleSeason) {
-                        episode.number.toFloat()
-                    } else {
-                        buildCombinedEpisodeNumber(bundle.seasonNumber, episode.number)
-                    }
-                SEpisode.create().apply {
-                    episode_number = episodeNumberValue
-                    name = buildEpisodeName(bundle.seasonNumber, episode.number, episode.title)
-                    summary = episode.overview
-                    preview_url = episode.image
-                    date_upload = episode.releaseDate?.toDate() ?: 0L
-                    setUrlWithoutDomain(
-                        "$baseUrl/series/${episode.slugName}/seasons/${episode.slugSeason}/episodes/${episode.slugEpisode}",
-                    )
-                }
-            }
-    }
-
-    private fun buildEpisodeName(
-        season: Int,
-        episode: Int,
-        title: String?,
-    ): String {
-        val label = title?.takeIf { it.isNotBlank() }
-        return buildString {
-            append("E")
-            append(episode)
-            label?.let {
-                append(" - ")
-                append(it)
-            }
-            append(" (T")
-            append(season)
-            append(")")
-        }
-    }
-
-    private fun buildCombinedEpisodeNumber(
-        season: Int,
-        episode: Int,
-    ): Float = (season * 1000 + episode).toFloat()
-
-    private fun buildSeasonUrl(
-        sourceBaseUrl: String,
-        baseUrlPath: String,
-        seasonNumber: Int,
-    ): String {
-        val normalizedPath =
-            when {
-                baseUrlPath.startsWith("http", true) -> baseUrlPath.removePrefix(sourceBaseUrl)
-                baseUrlPath.startsWith("/") -> baseUrlPath
-                baseUrlPath.isBlank() -> "/"
-                else -> "/${baseUrlPath.trimStart('/')}"
-            }
-        val hasQuery = normalizedPath.contains('?')
-        val separator = if (hasQuery) '&' else '?'
-        return "$normalizedPath${separator}season=$seasonNumber"
-    }
-
-    override fun getFilterList(): AnimeFilterList =
-        AnimeFilterList(
-            AnimeFilter.Header("La busqueda por texto ignora el filtro"),
-            GenreFilter(),
-        )
-
     private class GenreFilter :
         UriPartFilter(
             "Géneros",
@@ -938,77 +540,17 @@ class Gnula :
             ),
         )
 
-    private open class UriPartFilter(
-        displayName: String,
-        val vals: Array<Pair<String, String>>,
-    ) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
+    private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
         fun toUriPart() = vals[state].second
     }
 
-    private fun String.toAbsoluteUrl(): String =
-        if (startsWith("http", true)) {
-            this
-        } else {
-            val separator = if (startsWith("/")) "" else "/"
-            "$baseUrl$separator$this"
-        }
+    private inline fun <reified T> String.parseTo(): T = json.decodeFromString<T>(this)
 
-    private fun String.toDate(): Long = runCatching { DATE_FORMATTER.parse(trim())?.time }.getOrNull() ?: 0L
-
-    private fun urlSolverByType(
-        type: String,
-        slug: String,
-    ): String =
-        when (type) {
-            "PaginatedMovie", "PaginatedGenre" -> "$baseUrl/movies/$slug"
-            "PaginatedSerie" -> "$baseUrl/series/$slug"
-            else -> ""
-        }
-
-    private fun JsonObject.string(key: String): String? = get(key).stringValue()
-
-    private fun JsonObject.long(key: String): Long? = get(key).stringValue()?.toLongOrNull()
-
-    private fun JsonObject.array(key: String): JsonArray? = get(key) as? JsonArray
-
-    private fun JsonObject.obj(key: String): JsonObject? = get(key) as? JsonObject
-
-    private fun String.optimizeImageUrl(): String =
-        if (contains("/original/", ignoreCase = true)) {
-            replace("/original/", "/w400/")
-        } else {
-            this
-        }
-
-    private fun buildPrefix(
-        languageTag: String,
-        serverName: String,
-    ): String =
-        sequenceOf(languageTag, serverName)
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .joinToString(" ")
-
-    private fun String.withTrailingSpace(): String = if (isBlank()) "" else "$this "
-
-    private fun buildVideoName(
-        prefix: String,
-        detail: String,
-    ): String =
-        when {
-            prefix.isBlank() -> detail.trim()
-            detail.isBlank() -> prefix.trim()
-            else -> "$prefix ${detail.trim()}"
-        }
-
-    private fun JsonElement?.jsonObjectOrNull(): JsonObject? = this as? JsonObject
-
-    private fun JsonElement?.stringValue(): String? = (this as? JsonPrimitive)?.contentOrNull
-
-    private fun prefersSeasonFetch(): Boolean = preferences.splitSeasons
-
-    private fun preferredFetchType(isSeries: Boolean): FetchType =
-        if (isSeries && prefersSeasonFetch()) FetchType.Seasons else FetchType.Episodes
+    private fun urlSolverByType(type: String, slug: String): String = when (type) {
+        "PaginatedMovie", "PaginatedGenre" -> "$baseUrl/movies/$slug"
+        "PaginatedSerie" -> "$baseUrl/series/$slug"
+        else -> ""
+    }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         ListPreference(screen.context)

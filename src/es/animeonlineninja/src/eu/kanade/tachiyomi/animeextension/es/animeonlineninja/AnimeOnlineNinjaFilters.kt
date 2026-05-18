@@ -16,10 +16,9 @@ object AnimeOnlineNinjaFilters {
 
     private inline fun <reified R> AnimeFilterList.getFirst(): R = first { it is R } as R
 
-    private inline fun <reified R> AnimeFilterList.asUriPart(): String =
-        getFirst<R>().let {
-            (it as UriPartFilter).toUriPart()
-        }
+    private inline fun <reified R> AnimeFilterList.asUriPart(): String = getFirst<R>().let {
+        (it as UriPartFilter).toUriPart()
+    }
 
     class InvertedResultsFilter : AnimeFilter.CheckBox("Invertir resultados", false)
 

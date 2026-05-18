@@ -1,9 +1,13 @@
 package eu.kanade.tachiyomi.animeextension.es.animeflv
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import aniyomi.lib.okruextractor.OkruExtractor
+import aniyomi.lib.streamtapeextractor.StreamTapeExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
+import aniyomi.lib.universalextractor.UniversalExtractor
+import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
@@ -11,27 +15,27 @@ import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
-import eu.kanade.tachiyomi.lib.okruextractor.OkruExtractor
-import eu.kanade.tachiyomi.lib.streamtapeextractor.StreamTapeExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
-import eu.kanade.tachiyomi.lib.universalextractor.UniversalExtractor
-import eu.kanade.tachiyomi.lib.youruploadextractor.YourUploadExtractor
+import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.addEditTextPreference
+import keiyoushi.utils.delegate
+import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.parallelCatchingFlatMapBlocking
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.Headers
 import okhttp3.Request
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import uy.kohesive.injekt.injectLazy
-import kotlin.Exception
 
 class AnimeFlv :
-    AnimeHttpSource(),
+    ParsedAnimeHttpSource(),
     ConfigurableAnimeSource {
+
     override val name = "AnimeFLV"
 
     override val baseUrl = "https://www3.animeflv.net"
@@ -42,9 +46,14 @@ class AnimeFlv :
 
     private val json: Json by injectLazy()
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    private val preferences by getPreferencesLazy()
+
+    private val SharedPreferences.userAgent by preferences.delegate(PREF_USER_AGENT, DESKTOP_USER_AGENT)
+
+    override fun headersBuilder() = Headers.Builder()
+        .add("Referer", "$baseUrl/")
+        .add("Origin", baseUrl)
+        .add("User-Agent", preferences.userAgent.ifBlank { network.defaultUserAgentProvider() })
 
     companion object {
         private const val PREF_QUALITY_KEY = "preferred_quality"
@@ -54,6 +63,9 @@ class AnimeFlv :
         private const val PREF_SERVER_KEY = "preferred_server"
         private const val PREF_SERVER_DEFAULT = "StreamWish"
         private val SERVER_LIST = arrayOf("StreamWish", "YourUpload", "Okru", "Streamtape")
+
+        private const val PREF_USER_AGENT = "preferred_user_agent"
+        const val DESKTOP_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
     }
 
     // --------------------------------Video extractors------------------------------------
@@ -65,24 +77,17 @@ class AnimeFlv :
 
     override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/browse?order=rating&page=$page", headers)
 
-    override fun popularAnimeParse(response: Response): AnimesPage {
-        val document = response.asJsoup()
-        val animes =
-            document.select("div.Container ul.ListAnimes li article").map { element ->
-                SAnime.create().apply {
-                    setUrlWithoutDomain(element.select("div.Description a.Button").attr("abs:href"))
-                    title = element.select("a h3").text()
-                    thumbnail_url =
-                        try {
-                            element.select("a div.Image figure img").attr("src")
-                        } catch (e: Exception) {
-                            element.select("a div.Image figure img").attr("data-cfsrc")
-                        }
-                    description = element.select("div.Description p:eq(2)").text().removeSurrounding("\"")
-                }
-            }
-        val hasNextPage = document.select("ul.pagination li a[rel=\"next\"]").any()
-        return AnimesPage(animes, hasNextPage)
+    override fun popularAnimeFromElement(element: Element): SAnime {
+        val anime = SAnime.create()
+        anime.setUrlWithoutDomain(element.select("div.Description a.Button").attr("abs:href"))
+        anime.title = element.select("a h3").text()
+        anime.thumbnail_url = try {
+            element.select("a div.Image figure img").attr("src")
+        } catch (_: Exception) {
+            element.select("a div.Image figure img").attr("data-cfsrc")
+        }
+        anime.description = element.select("div.Description p:eq(2)").text().removeSurrounding("\"")
+        return anime
     }
 
     override fun episodeListParse(response: Response): List<SEpisode> {
@@ -94,13 +99,12 @@ class AnimeFlv :
                 val animeInfo = scriptData.substringAfter("var anime_info = [").substringBefore("];")
                 val arrInfo = json.decodeFromString<List<String>>("[$animeInfo]")
 
-                val animeId = arrInfo[0]!!.replace("\"", "")
-                val animeUri = arrInfo[2]!!.replace("\"", "")
-
-                val episodes = scriptData.substringAfter("var episodes = [").substringBefore("];").trim()
+                val animeUri = arrInfo[2].replace("\"", "")
+                val episodes = script.data().substringAfter("var episodes = [").substringBefore("];").trim()
                 val arrEpisodes = episodes.split("],[")
-                arrEpisodes!!.forEach { arrEp ->
-                    val noEpisode = arrEp!!.replace("[", "")!!.replace("]", "")!!.split(",")!![0]
+                arrEpisodes.forEach { arrEp ->
+                    val noEpisode = arrEp.replace("[", "").replace("]", "")
+                        .split(",")[0]
                     val ep = SEpisode.create()
                     val url = "$baseUrl/ver/$animeUri-$noEpisode"
                     ep.setUrlWithoutDomain(url)
@@ -117,27 +121,26 @@ class AnimeFlv :
 
     override fun seasonListParse(response: Response): List<SAnime> = emptyList()
 
-    override fun hosterListParse(response: Response): List<Hoster> {
+    override fun episodeFromElement(element: Element) = throw UnsupportedOperationException()
+
+    /*--------------------------------Video extractors------------------------------------*/
+    private val streamTapeExtractor by lazy { StreamTapeExtractor(client) }
+    private val okruExtractor by lazy { OkruExtractor(client) }
+    private val yourUploadExtractor by lazy { YourUploadExtractor(client) }
+    private val streamWishExtractor by lazy { StreamWishExtractor(client, headers) }
+    private val universalExtractor by lazy { UniversalExtractor(client) }
+
+    override fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         val jsonString = document.selectFirst("script:containsData(var videos = {)")?.data() ?: return emptyList()
         val responseString = jsonString.substringAfter("var videos =").substringBefore(";").trim()
-        val servers = json.decodeFromString<ServerModel>(responseString).sub
-
-        val hosterMap = mutableMapOf<String, MutableList<Video>>()
-
-        servers.forEach { server ->
-            val videos =
-                when (server.title) {
-                    "Stape" -> listOf(streamTapeExtractor.videoFromUrl(server.url ?: server.code)!!)
-                    "Okru" -> okruExtractor.videosFromUrl(server.url ?: server.code)
-                    "YourUpload" -> yourUploadExtractor.videoFromUrl(server.url ?: server.code, headers = headers)
-                    "SW" -> streamWishExtractor.videosFromUrl(server.url ?: server.code, videoNameGen = { "StreamWish:$it" })
-                    else -> universalExtractor.videosFromUrl(server.url ?: server.code, headers)
-                }
-
-            if (videos.isNotEmpty()) {
-                val serverName = server.title ?: "Unknown"
-                hosterMap.getOrPut(serverName) { mutableListOf() }.addAll(videos)
+        return json.decodeFromString<ServerModel>(responseString).sub.parallelCatchingFlatMapBlocking { it ->
+            when (it.title) {
+                "Stape" -> streamTapeExtractor.videosFromUrl(it.code)
+                "Okru" -> okruExtractor.videosFromUrl(it.code)
+                "YourUpload" -> yourUploadExtractor.videoFromUrl(it.code, headers = headers)
+                "SW" -> streamWishExtractor.videosFromUrl(it.code, videoNameGen = { "StreamWish:$it" })
+                else -> universalExtractor.videosFromUrl(it.code, headers)
             }
         }
 
@@ -156,8 +159,8 @@ class AnimeFlv :
     ): Request {
         val params = AnimeFlvFilters.getSearchParameters(filters)
         return when {
-            query.isNotBlank() -> GET("$baseUrl/browse?q=$query&page=$page")
-            params.filter.isNotBlank() -> GET("$baseUrl/browse${params.getQuery()}&page=$page")
+            query.isNotBlank() -> GET("$baseUrl/browse?q=$query&page=$page", headers)
+            params.filter.isNotBlank() -> GET("$baseUrl/browse${params.getQuery()}&page=$page", headers)
             else -> popularAnimeRequest(page)
         }
     }
@@ -177,35 +180,27 @@ class AnimeFlv :
         return anime
     }
 
-    private fun parseStatus(statusString: String): Int =
-        when {
-            statusString.contains("En emision") -> SAnime.ONGOING
-            statusString.contains("Finalizado") -> SAnime.COMPLETED
-            else -> SAnime.UNKNOWN
-        }
+    private fun parseStatus(statusString: String): Int = when {
+        statusString.contains("En emision") -> SAnime.ONGOING
+        statusString.contains("Finalizado") -> SAnime.COMPLETED
+        else -> SAnime.UNKNOWN
+    }
 
     override fun latestUpdatesRequest(page: Int) = GET(baseUrl, headers)
 
-    override fun latestUpdatesParse(response: Response): AnimesPage {
-        val document = response.asJsoup()
-        val animes =
-            document.select("div.Container ul.ListEpisodios li a.fa-play").map { element ->
-                SAnime.create().apply {
-                    setUrlWithoutDomain(
-                        element
-                            .select("a")
-                            .attr("abs:href")
-                            .replace("/ver/", "/anime/")
-                            .substringBeforeLast("-"),
-                    )
-                    title = element.select("strong.Title").text()
-                    thumbnail_url = element.select("span.Image img").attr("abs:src").replace("thumbs", "covers")
-                }
-            }
-        return AnimesPage(animes, false)
+    override fun latestUpdatesNextPageSelector() = null
+
+    override fun latestUpdatesSelector() = "div.Container ul.ListEpisodios li a.fa-play"
+
+    override fun latestUpdatesFromElement(element: Element): SAnime {
+        val anime = SAnime.create()
+        anime.setUrlWithoutDomain(element.select("a").attr("abs:href").replace("/ver/", "/anime/").substringBeforeLast("-"))
+        anime.title = element.select("strong.Title").text()
+        anime.thumbnail_url = element.select("span.Image img").attr("abs:src").replace("thumbs", "covers")
+        return anime
     }
 
-    override fun List<Video>.sortVideos(): List<Video> {
+    override fun List<Video>.sort(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         return this
@@ -225,39 +220,31 @@ class AnimeFlv :
     }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        ListPreference(screen.context)
-            .apply {
-                key = PREF_SERVER_KEY
-                title = "Preferred server"
-                entries = SERVER_LIST
-                entryValues = SERVER_LIST
-                setDefaultValue(PREF_SERVER_DEFAULT)
-                summary = "%s"
+        ListPreference(screen.context).apply {
+            key = PREF_SERVER_KEY
+            title = "Preferred server"
+            entries = SERVER_LIST
+            entryValues = SERVER_LIST
+            setDefaultValue(PREF_SERVER_DEFAULT)
+            summary = "%s"
+        }.also(screen::addPreference)
 
-                setOnPreferenceChangeListener { _, newValue ->
-                    val selected = newValue as String
-                    val index = findIndexOfValue(selected)
-                    val entry = entryValues[index] as String
-                    preferences.edit().putString(key, entry).commit()
-                }
-            }.also(screen::addPreference)
+        ListPreference(screen.context).apply {
+            key = PREF_QUALITY_KEY
+            title = "Preferred quality"
+            entries = QUALITY_LIST
+            entryValues = QUALITY_LIST
+            setDefaultValue(PREF_QUALITY_DEFAULT)
+            summary = "%s"
+        }.also(screen::addPreference)
 
-        ListPreference(screen.context)
-            .apply {
-                key = PREF_QUALITY_KEY
-                title = "Preferred quality"
-                entries = QUALITY_LIST
-                entryValues = QUALITY_LIST
-                setDefaultValue(PREF_QUALITY_DEFAULT)
-                summary = "%s"
-
-                setOnPreferenceChangeListener { _, newValue ->
-                    val selected = newValue as String
-                    val index = findIndexOfValue(selected)
-                    val entry = entryValues[index] as String
-                    preferences.edit().putString(key, entry).commit()
-                }
-            }.also(screen::addPreference)
+        screen.addEditTextPreference(
+            key = PREF_USER_AGENT,
+            title = "User-Agent",
+            default = DESKTOP_USER_AGENT,
+            summary = "Leave blank to use the default app user agent.",
+            restartRequired = true,
+        )
     }
 
     @Serializable
@@ -271,7 +258,6 @@ class AnimeFlv :
         val server: String? = "",
         val title: String? = "",
         val ads: Long? = null,
-        val url: String? = null,
         val code: String = "",
         @SerialName("allow_mobile")
         val allowMobile: Boolean? = false,

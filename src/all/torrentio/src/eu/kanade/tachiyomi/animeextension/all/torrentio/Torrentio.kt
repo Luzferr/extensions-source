@@ -1,7 +1,6 @@
 package eu.kanade.tachiyomi.animeextension.all.torrentio
 
 import android.app.Application
-import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
@@ -23,6 +22,7 @@ import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
+import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -34,7 +34,9 @@ import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class Torrentio : ConfigurableAnimeSource, AnimeHttpSource() {
+class Torrentio :
+    AnimeHttpSource(),
+    ConfigurableAnimeSource {
 
     override val name = "Torrentio (Torrent / Debrid)"
 
@@ -46,9 +48,7 @@ class Torrentio : ConfigurableAnimeSource, AnimeHttpSource() {
 
     private val json: Json by injectLazy()
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    private val preferences by getPreferencesLazy()
 
     private val context = Injekt.get<Application>()
     private val handler by lazy { Handler(Looper.getMainLooper()) }
@@ -68,8 +68,7 @@ class Torrentio : ConfigurableAnimeSource, AnimeHttpSource() {
     }
 
     // ============================== JustWatch Api Query ======================
-    private fun justWatchQuery(): String {
-        return """
+    private fun justWatchQuery(): String = """
             query GetPopularTitles(
               ${"$"}country: Country!,
               ${"$"}first: Int!,
@@ -123,8 +122,7 @@ class Torrentio : ConfigurableAnimeSource, AnimeHttpSource() {
                 }
               }
             }
-        """.trimIndent()
-    }
+    """.trimIndent()
 
     private fun parseSearchJson(jsonLine: String?): AnimesPage {
         val jsonData = jsonLine ?: return AnimesPage(emptyList(), false)
@@ -188,7 +186,8 @@ class Torrentio : ConfigurableAnimeSource, AnimeHttpSource() {
 
     override fun popularAnimeParse(response: Response): AnimesPage {
         val jsonData = response.body.string()
-        return parseSearchJson(jsonData) }
+        return parseSearchJson(jsonData)
+    }
 
     // =============================== Latest ===============================
     override fun latestUpdatesRequest(page: Int) = throw UnsupportedOperationException()
@@ -196,15 +195,13 @@ class Torrentio : ConfigurableAnimeSource, AnimeHttpSource() {
     override fun latestUpdatesParse(response: Response) = throw UnsupportedOperationException()
 
     // =============================== Search ===============================
-    override suspend fun getSearchAnime(page: Int, query: String, filters: AnimeFilterList): AnimesPage {
-        return if (query.startsWith(PREFIX_SEARCH)) { // URL intent handler
-            val id = query.removePrefix(PREFIX_SEARCH)
-            client.newCall(GET("$baseUrl/anime/$id"))
-                .awaitSuccess()
-                .use(::searchAnimeByIdParse)
-        } else {
-            super.getSearchAnime(page, query, filters)
-        }
+    override suspend fun getSearchAnime(page: Int, query: String, filters: AnimeFilterList): AnimesPage = if (query.startsWith(PREFIX_SEARCH)) { // URL intent handler
+        val id = query.removePrefix(PREFIX_SEARCH)
+        client.newCall(GET("$baseUrl/anime/$id"))
+            .awaitSuccess()
+            .use(::searchAnimeByIdParse)
+    } else {
+        super.getSearchAnime(page, query, filters)
     }
 
     private fun searchAnimeByIdParse(response: Response): AnimesPage {
@@ -315,7 +312,11 @@ class Torrentio : ConfigurableAnimeSource, AnimeHttpSource() {
             "series" -> {
                 episodeList.meta.videos
                     ?.let { videos ->
-                        if (preferences.getBoolean(UPCOMING_EP_KEY, UPCOMING_EP_DEFAULT)) { videos } else { videos.filter { video -> (video.released?.let { parseDate(it) } ?: 0L) <= System.currentTimeMillis() } }
+                        if (preferences.getBoolean(UPCOMING_EP_KEY, UPCOMING_EP_DEFAULT)) {
+                            videos
+                        } else {
+                            videos.filter { video -> (video.released?.let { parseDate(it) } ?: 0L) <= System.currentTimeMillis() }
+                        }
                     }
                     ?.map { video ->
                         SEpisode.create().apply {
@@ -350,10 +351,8 @@ class Torrentio : ConfigurableAnimeSource, AnimeHttpSource() {
             else -> emptyList()
         }
     }
-    private fun parseDate(dateStr: String): Long {
-        return runCatching { DATE_FORMATTER.parse(dateStr)?.time }
-            .getOrNull() ?: 0L
-    }
+    private fun parseDate(dateStr: String): Long = runCatching { DATE_FORMATTER.parse(dateStr)?.time }
+        .getOrNull() ?: 0L
 
     // ============================ Video Links =============================
 
@@ -390,6 +389,7 @@ class Torrentio : ConfigurableAnimeSource, AnimeHttpSource() {
                     }
                     throw UnsupportedOperationException()
                 }
+
                 !token.isNullOrBlank() && debridProvider != "none" -> append("$debridProvider=$token|")
             }
             append(episode.url)
@@ -435,7 +435,9 @@ class Torrentio : ConfigurableAnimeSource, AnimeHttpSource() {
                 if (debridProvider == "none") {
                     val trackerList = animeTrackers.split(",").map { it.trim() }.filter { it.isNotBlank() }.joinToString("&tr=")
                     "magnet:?xt=urn:btih:${stream.infoHash}&dn=${stream.infoHash}&tr=$trackerList&index=${stream.fileIdx}"
-                } else stream.url ?: ""
+                } else {
+                    stream.url ?: ""
+                }
             Video(urlOrHash, ((stream.name?.replace("Torrentio\n", "") ?: "") + "\n" + stream.title), urlOrHash)
         }.orEmpty()
     }
@@ -492,7 +494,7 @@ class Torrentio : ConfigurableAnimeSource, AnimeHttpSource() {
             setOnPreferenceChangeListener { _, newValue ->
                 runCatching {
                     val value = (newValue as String).trim().ifBlank { PREF_TOKEN_DEFAULT }
-                    Toast.makeText(screen.context, "Restart Aniyomi to apply new setting.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(screen.context, "Restart App to apply new setting.", Toast.LENGTH_LONG).show()
                     preferences.edit().putString(key, value).commit()
                 }.getOrDefault(false)
             }

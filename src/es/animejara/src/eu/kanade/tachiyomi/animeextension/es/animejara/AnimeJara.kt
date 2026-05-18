@@ -4,27 +4,24 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
-import androidx.preference.SwitchPreferenceCompat
+import aniyomi.lib.filemoonextractor.FilemoonExtractor
+import aniyomi.lib.mixdropextractor.MixDropExtractor
+import aniyomi.lib.mp4uploadextractor.Mp4uploadExtractor
+import aniyomi.lib.okruextractor.OkruExtractor
+import aniyomi.lib.streamtapeextractor.StreamTapeExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
+import aniyomi.lib.uqloadextractor.UqloadExtractor
+import aniyomi.lib.vidhideextractor.VidHideExtractor
+import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
-import eu.kanade.tachiyomi.animesource.model.FetchType
-import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
-import eu.kanade.tachiyomi.lib.filemoonextractor.FilemoonExtractor
 import eu.kanade.tachiyomi.lib.m3u8server.M3u8Integration
 import eu.kanade.tachiyomi.lib.mailruextractor.MailRuExtractor
-import eu.kanade.tachiyomi.lib.mixdropextractor.MixDropExtractor
-import eu.kanade.tachiyomi.lib.mp4uploadextractor.Mp4uploadExtractor
-import eu.kanade.tachiyomi.lib.okruextractor.OkruExtractor
-import eu.kanade.tachiyomi.lib.streamtapeextractor.StreamTapeExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
-import eu.kanade.tachiyomi.lib.uqloadextractor.UqloadExtractor
-import eu.kanade.tachiyomi.lib.vidhideextractor.VidHideExtractor
-import eu.kanade.tachiyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
 import kotlinx.serialization.json.Json
@@ -146,7 +143,6 @@ class AnimeJara :
                         card.selectFirst("img.card-poster")?.let {
                             it.attr("data-src").ifBlank { it.attr("abs:src") }
                         }
-                    fetch_type = preferredFetchType(true)
                 }
             }
         return AnimesPage(animes, hasNextPage = false)
@@ -158,7 +154,6 @@ class AnimeJara :
 
     override fun animeDetailsParse(response: Response): SAnime {
         val document = response.asJsoup()
-        val requestUrl = response.request.url
         return SAnime.create().apply {
             title = document.selectFirst("h1")?.text()?.trim() ?: ""
             thumbnail_url = document.selectFirst("img.main-poster-img")?.attr("abs:src")
@@ -176,23 +171,6 @@ class AnimeJara :
                 }
             genre = document.select(".anime-categorias span").joinToString { it.text().trim() }
             description = document.selectFirst(".anime-sinopsis-contenedor div")?.text()?.trim()
-
-            // Detect seasons for splitting
-            val isSeason = requestUrl.fragment?.startsWith("season") == true
-            if (isSeason) {
-                fetch_type = FetchType.Episodes
-                // Preserve the URL with fragment so episodeListParse can read it
-                url = requestUrl.toString().removePrefix(baseUrl)
-            } else {
-                val scriptData = document.select("script").joinToString("\n") { it.data() }
-                val temporadasJson = TEMPORADAS_REGEX.find(scriptData)?.groupValues?.get(1)
-                val temporadas =
-                    temporadasJson?.let {
-                        runCatching { json.decodeFromString<List<TemporadaDto>>(it) }.getOrNull()
-                    }
-                val hasSeasons = (temporadas?.size ?: 0) > 1
-                fetch_type = preferredFetchType(hasSeasons)
-            }
         }
     }
 
@@ -213,35 +191,20 @@ class AnimeJara :
                 ?: return emptyList()
 
         val allTemporadas = json.decodeFromString<List<TemporadaDto>>(temporadasJson)
-
-        // If coming from a season entry, filter to that season only
-        val seasonNum =
-            response.request.url.fragment
-                ?.substringAfter("season=", "")
-                ?.toIntOrNull()
-        val temporadas =
-            if (seasonNum != null) {
-                allTemporadas.filter { it.numeroTemporada == seasonNum }
-            } else {
-                allTemporadas
-            }
-
-        val multiSeason = temporadas.size > 1 && seasonNum == null
         var globalEpCounter = 0
 
-        return temporadas
+        return allTemporadas
             .flatMap { temporada ->
                 temporada.episodios.map { episodio ->
                     globalEpCounter++
                     val epNum = episodio.numeroEpisodio.toIntOrNull() ?: 0
                     SEpisode.create().apply {
                         setUrlWithoutDomain("/episode/$slug-${temporada.numeroTemporada}x$epNum/")
-                        name =
-                            buildString {
-                                if (multiSeason) append("T${temporada.numeroTemporada} - ")
-                                append("Episodio $epNum")
-                                if (episodio.nombreEpisodio.isNotBlank()) append(": ${episodio.nombreEpisodio}")
-                            }
+                        name = buildString {
+                            append("T${temporada.numeroTemporada} - ")
+                            append("Episodio $epNum")
+                            if (episodio.nombreEpisodio.isNotBlank()) append(": ${episodio.nombreEpisodio}")
+                        }
                         episode_number = globalEpCounter.toFloat()
                         date_upload = parseDate(episodio.fechaActualizacion)
                         scanlator = episodio.idiomas.joinToString(", ")
@@ -250,9 +213,11 @@ class AnimeJara :
             }.reversed()
     }
 
-    // ============================== Hoster List ==============================
+    // ============================== Video List ==============================
 
-    override fun hosterListParse(response: Response): List<Hoster> {
+    override fun videoListRequest(episode: SEpisode): Request = GET("$baseUrl${episode.url}", headers)
+
+    override fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         val scriptData = document.select("script").joinToString("\n") { it.data() }
 
@@ -263,7 +228,7 @@ class AnimeJara :
         val enlaces = json.decodeFromString<List<String>>(enlacesJson)
         val langButtons = document.select(".boton-idioma")
 
-        val hosterMap = mutableMapOf<String, MutableList<Video>>()
+        val videoList = mutableListOf<Video>()
         val embedHeaders =
             headers
                 .newBuilder()
@@ -300,9 +265,11 @@ class AnimeJara :
                     val hosterKey = "$langName: $serverName"
 
                     try {
-                        val videos = extractVideos(serverUrl, hosterKey)
+                        val videos = kotlinx.coroutines.runBlocking {
+                            extractVideos(serverUrl, hosterKey)
+                        }
                         if (videos.isNotEmpty()) {
-                            hosterMap.getOrPut(hosterKey) { mutableListOf() }.addAll(videos)
+                            videoList.addAll(videos)
                         }
                     } catch (_: Exception) {
                     }
@@ -311,59 +278,13 @@ class AnimeJara :
             }
         }
 
-        return hosterMap.map { (name, videos) ->
-            Hoster(hosterName = name, videoList = videos.sortVideos())
-        }
+        return videoList.sortVideos()
     }
 
-    // ============================== Season List ==============================
-
-    override suspend fun getSeasonList(anime: SAnime): List<SAnime> {
-        if (anime.fetch_type != FetchType.Seasons) return emptyList()
-        val url = anime.url.substringBefore("#").trimEnd('/') + "/"
-        val response = client.newCall(GET("$baseUrl$url", headers)).execute()
-        val document = response.use { it.asJsoup() }
-        val scriptData = document.select("script").joinToString("\n") { it.data() }
-
-        val temporadasJson =
-            TEMPORADAS_REGEX.find(scriptData)?.groupValues?.get(1)
-                ?: return listOf(singleSeasonFallback(anime))
-
-        val temporadas =
-            runCatching {
-                json.decodeFromString<List<TemporadaDto>>(temporadasJson)
-            }.getOrNull() ?: return listOf(singleSeasonFallback(anime))
-
-        if (temporadas.size <= 1) return listOf(singleSeasonFallback(anime))
-
-        return temporadas.map { temporada ->
-            SAnime.create().apply {
-                title = "Temporada ${temporada.numeroTemporada}"
-                thumbnail_url = temporada.posterTemporada.ifBlank { anime.thumbnail_url }
-                fetch_type = FetchType.Episodes
-                season_number = temporada.numeroTemporada.toDouble()
-                setUrlWithoutDomain("$url#season=${temporada.numeroTemporada}")
-            }
-        }
-    }
-
-    private fun singleSeasonFallback(anime: SAnime): SAnime =
-        SAnime.create().apply {
-            title = anime.title
-            thumbnail_url = anime.thumbnail_url
-            fetch_type = FetchType.Episodes
-            season_number = 1.0
-            val basePath = anime.url.substringBefore("#").trimEnd('/') + "/"
-            setUrlWithoutDomain("$basePath#season=1")
-        }
-
-    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
-
-    private fun extractVideos(
+    private suspend fun extractVideos(
         url: String,
         prefix: String,
     ): List<Video> {
-        // Handle streamhj.top wrapper URLs that contain the actual embed URL
         val resolvedUrl =
             if ("streamhj.top" in url && "go.php" in url) {
                 android.net.Uri
@@ -390,7 +311,7 @@ class AnimeJara :
             }
 
             "mixdrop" in lowerUrl -> {
-                mixDropExtractor.videoFromUrl(resolvedUrl, prefix = "$prefix - ")
+                mixDropExtractor.videosFromUrl(resolvedUrl, prefix = "$prefix - ")
             }
 
             "vidhide" in lowerUrl || "filelions" in lowerUrl -> {
@@ -402,7 +323,7 @@ class AnimeJara :
             }
 
             "mp4upload" in lowerUrl -> {
-                mp4uploadExtractor.videosFromUrl(resolvedUrl, headers, prefix = "$prefix - ") { videoUrl, videoHeaders ->
+                mp4uploadExtractor.videosFromUrl(resolvedUrl, headers, prefix = "$prefix - ") { videoUrl: String, videoHeaders: Map<String, String> ->
                     videoProxy.createProxyUrl(videoUrl, videoHeaders)
                 }
             }
@@ -470,44 +391,25 @@ class AnimeJara :
                     preferences.edit().putString(key, newValue as String).commit()
                 }
             }.also(screen::addPreference)
-
-        SwitchPreferenceCompat(screen.context)
-            .apply {
-                key = PREF_SPLIT_SEASONS_KEY
-                title = "Separar temporadas"
-                summary = "Muestra cada temporada como una entrada independiente"
-                setDefaultValue(PREF_SPLIT_SEASONS_DEFAULT)
-                setOnPreferenceChangeListener { _, newValue ->
-                    preferences.edit().putBoolean(key, newValue as Boolean).commit()
-                }
-            }.also(screen::addPreference)
     }
 
     // ============================== Utilities ==============================
 
-    private fun parseDate(dateStr: String): Long =
-        try {
-            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).parse(dateStr)?.time ?: 0L
-        } catch (_: Exception) {
-            0L
-        }
+    private fun parseDate(dateStr: String): Long = try {
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).parse(dateStr)?.time ?: 0L
+    } catch (_: Exception) {
+        0L
+    }
 
-    private fun preferredFetchType(hasSeasons: Boolean): FetchType =
-        if (hasSeasons && preferences.getBoolean(PREF_SPLIT_SEASONS_KEY, PREF_SPLIT_SEASONS_DEFAULT)) {
-            FetchType.Seasons
-        } else {
-            FetchType.Episodes
-        }
-
-    override fun List<Video>.sortVideos(): List<Video> {
+    private fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val lang = preferences.getString(PREF_LANGUAGE_KEY, PREF_LANGUAGE_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
         return sortedWith(
             compareBy(
-                { it.videoTitle.contains(lang, true).not() },
-                { it.videoTitle.contains(server, true).not() },
-                { it.videoTitle.contains(quality, true).not() },
+                { it.quality.contains(lang, true).not() },
+                { it.quality.contains(server, true).not() },
+                { it.quality.contains(quality, true).not() },
             ),
         )
     }
@@ -540,8 +442,5 @@ class AnimeJara :
                 "okru",
                 "yourupload",
             )
-
-        private const val PREF_SPLIT_SEASONS_KEY = "pref_split_seasons"
-        private const val PREF_SPLIT_SEASONS_DEFAULT = true
     }
 }

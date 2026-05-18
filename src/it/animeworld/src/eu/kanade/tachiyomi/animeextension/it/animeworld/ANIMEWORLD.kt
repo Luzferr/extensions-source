@@ -1,9 +1,11 @@
 package eu.kanade.tachiyomi.animeextension.it.animeworld
 
-import android.app.Application
-import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import aniyomi.lib.doodextractor.DoodExtractor
+import aniyomi.lib.streamtapeextractor.StreamTapeExtractor
+import aniyomi.lib.vidguardextractor.VidGuardExtractor
+import aniyomi.lib.vidhideextractor.VidHideExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
@@ -11,12 +13,10 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
-import eu.kanade.tachiyomi.lib.doodextractor.DoodExtractor
-import eu.kanade.tachiyomi.lib.streamhidevidextractor.StreamHideVidExtractor
-import eu.kanade.tachiyomi.lib.streamtapeextractor.StreamTapeExtractor
-import eu.kanade.tachiyomi.lib.vidguardextractor.VidGuardExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.getPreferencesLazy
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -24,11 +24,11 @@ import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 
-class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
+class ANIMEWORLD :
+    ParsedAnimeHttpSource(),
+    ConfigurableAnimeSource {
 
     override val name = "ANIMEWORLD.tv"
 
@@ -47,9 +47,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
 
     private val json: Json by injectLazy()
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    private val preferences by getPreferencesLazy()
 
     // Popular Anime - Same Format as Search
 
@@ -60,9 +58,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
 
     // Episodes
 
-    override fun episodeListParse(response: Response): List<SEpisode> {
-        return super.episodeListParse(response).reversed()
-    }
+    override fun episodeListParse(response: Response): List<SEpisode> = super.episodeListParse(response).reversed()
 
     override fun episodeListSelector() = "div.server.active ul.episodes li.episode a"
 
@@ -78,9 +74,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
         return episode
     }
 
-    private fun getNumberFromEpsString(epsStr: String): String {
-        return epsStr.filter { it.isDigit() }
-    }
+    private fun getNumberFromEpsString(epsStr: String): String = epsStr.filter { it.isDigit() }
 
     // Video urls
 
@@ -139,20 +133,25 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
                 url2.contains("AnimeWorld Server") -> {
                     listOf(Video(url, "AnimeWorld Server", url))
                 }
+
                 url.contains("https://doo") -> {
                     DoodExtractor(client).videoFromUrl(url, redirect = true)
                         ?.let(::listOf)
                 }
+
                 url.contains("streamtape") -> {
                     StreamTapeExtractor(client).videoFromUrl(url.replace("/v/", "/e/"))
                         ?.let(::listOf)
                 }
+
                 url.contains("streamhide") -> {
-                    StreamHideVidExtractor(client, headers).videosFromUrl(url)
+                    runBlocking { VidHideExtractor(client, headers).videosFromUrl(url) }
                 }
+
                 url.contains("vidguard") or url.contains("listeamed") -> {
                     VidGuardExtractor(client).videosFromUrl(url)
                 }
+
                 else -> null
             } ?: emptyList()
         }
@@ -190,8 +189,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
 
     override fun searchAnimeNextPageSelector(): String = "div.paging-wrapper a#go-next-page"
 
-    override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request =
-        GET("$baseUrl/filter?${getSearchParameters(filters)}&keyword=$query&page=$page")
+    override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request = GET("$baseUrl/filter?${getSearchParameters(filters)}&keyword=$query&page=$page")
 
     // Details
 
@@ -207,12 +205,10 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
         return anime
     }
 
-    private fun parseStatus(statusString: String): Int {
-        return when (statusString) {
-            "In corso" -> SAnime.ONGOING
-            "Finito" -> SAnime.COMPLETED
-            else -> SAnime.UNKNOWN
-        }
+    private fun parseStatus(statusString: String): Int = when (statusString) {
+        "In corso" -> SAnime.ONGOING
+        "Finito" -> SAnime.COMPLETED
+        else -> SAnime.UNKNOWN
     }
 
     // Latest - Same format as search
@@ -415,6 +411,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
                         }
                     }
                 }
+
                 is SeasonList -> { // ---Season
                     filter.state.forEach { Season ->
                         if (Season.state) {
@@ -422,6 +419,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
                         }
                     }
                 }
+
                 is YearList -> { // ---Year
                     filter.state.forEach { Year ->
                         if (Year.state) {
@@ -429,6 +427,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
                         }
                     }
                 }
+
                 is TypeList -> { // ---Type
                     filter.state.forEach { Type ->
                         if (Type.state) {
@@ -436,6 +435,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
                         }
                     }
                 }
+
                 is StateList -> { // ---State
                     filter.state.forEach { State ->
                         if (State.state) {
@@ -443,6 +443,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
                         }
                     }
                 }
+
                 is Studio -> {
                     if (filter.state.isNotEmpty()) {
                         val studios = filter.state.split(",").toTypedArray()
@@ -451,6 +452,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
                         }
                     }
                 }
+
                 is SubList -> { // ---Subs
                     filter.state.forEach { Sub ->
                         if (Sub.state) {
@@ -458,6 +460,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
                         }
                     }
                 }
+
                 is AudioList -> { // ---Audio
                     filter.state.forEach { Audio ->
                         if (Audio.state) {
@@ -465,6 +468,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
                         }
                     }
                 }
+
                 is OrderFilter -> {
                     if (filter.values[filter.state] == "Standard") totalstring += "&sort=0"
                     if (filter.values[filter.state] == "Ultime Aggiunte") totalstring += "&sort=1"
@@ -474,6 +478,7 @@ class ANIMEWORLD : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
                     if (filter.values[filter.state] == "Più Recenti") totalstring += "&sort=5"
                     if (filter.values[filter.state] == "Più Visti") totalstring += "&sort=6"
                 }
+
                 else -> {}
             }
         }

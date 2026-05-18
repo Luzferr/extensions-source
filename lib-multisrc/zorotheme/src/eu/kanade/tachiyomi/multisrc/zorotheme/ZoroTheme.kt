@@ -1,12 +1,7 @@
 package eu.kanade.tachiyomi.multisrc.zorotheme
 
-import android.app.Application
 import android.content.SharedPreferences
-import android.widget.Toast
-import androidx.preference.ListPreference
-import androidx.preference.MultiSelectListPreference
 import androidx.preference.PreferenceScreen
-import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.SAnime
@@ -17,10 +12,15 @@ import eu.kanade.tachiyomi.multisrc.zorotheme.dto.HtmlResponse
 import eu.kanade.tachiyomi.multisrc.zorotheme.dto.SourcesResponse
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.await
-import eu.kanade.tachiyomi.util.parallelCatchingFlatMap
-import eu.kanade.tachiyomi.util.parallelMapNotNull
-import eu.kanade.tachiyomi.util.parseAs
-import kotlinx.serialization.json.Json
+import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.LazyMutable
+import keiyoushi.utils.addListPreference
+import keiyoushi.utils.addSetPreference
+import keiyoushi.utils.addSwitchPreference
+import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.parallelCatchingFlatMap
+import keiyoushi.utils.parallelMapNotNull
+import keiyoushi.utils.parseAs
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -28,36 +28,38 @@ import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
-import uy.kohesive.injekt.injectLazy
+import kotlin.getValue
 
 abstract class ZoroTheme(
     override val lang: String,
     override val name: String,
     override val baseUrl: String,
     private val hosterNames: List<String>,
-) : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
+) : ParsedAnimeHttpSource(),
+    ConfigurableAnimeSource {
 
     override val supportsLatest = true
 
-    private val json: Json by injectLazy()
-
-    val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-            .clearOldHosts()
+    protected val preferences by getPreferencesLazy {
+        clearOldHosts()
     }
 
-    protected val docHeaders = headers.newBuilder().apply {
-        add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+    protected var docHeaders by LazyMutable {
+        newHeaders()
+    }
+
+    protected fun newHeaders(): Headers = headers.newBuilder().apply {
+        add(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        )
         add("Host", baseUrl.toHttpUrl().host)
         add("Referer", "$baseUrl/")
     }.build()
 
     protected open val ajaxRoute = ""
 
-    private val useEnglish by lazy { preferences.getTitleLang == "English" }
-    private val markFiller by lazy { preferences.markFiller }
+    private var useEnglish by LazyMutable { preferences.getTitleLang == "English" }
 
     // ============================== Popular ===============================
 
@@ -132,6 +134,12 @@ abstract class ZoroTheme(
     override fun animeDetailsParse(document: Document) = SAnime.create().apply {
         thumbnail_url = document.selectFirst("div.anisc-poster img")!!.attr("src")
 
+        val promotions = document.select(".block_area-promotions-list > .screen-items > .item").map {
+            val title = it.attr("data-title")
+            val url = it.attr("data-src")
+            "[$title]($url)"
+        }
+
         document.selectFirst("div.anisc-info")!!.let { info ->
             author = info.getInfo("Studios:")
             status = parseStatus(info.getInfo("Status:"))
@@ -143,11 +151,23 @@ abstract class ZoroTheme(
                 info.getInfo("Premiered:", full = true)?.also(::append)
                 info.getInfo("Synonyms:", full = true)?.also(::append)
                 info.getInfo("Japanese:", full = true)?.also(::append)
+                promotions.takeIf { it.isNotEmpty() }?.also {
+                    append("\n\n**Promotions:**\n${it.joinToString("\n")}")
+                }
             }
         }
     }
 
-    private fun Element.getInfo(
+    override fun relatedAnimeListParse(response: Response): List<SAnime> {
+        val relatedAnimeSelector = ".block_area_sidebar .block_area-header:contains(Related Anime) + .block_area-content ul > li"
+
+        val document = response.asJsoup()
+        return listOf(relatedAnimeSelector, relatedAnimeListSelector()).flatMap { selector ->
+            document.select(selector).map { relatedAnimeFromElement(it) }
+        }
+    }
+
+    open fun Element.getInfo(
         tag: String,
         isList: Boolean = false,
         full: Boolean = false,
@@ -161,12 +181,10 @@ abstract class ZoroTheme(
         return if (full && value != null) "\n$tag $value" else value
     }
 
-    private fun parseStatus(statusString: String?): Int {
-        return when (statusString) {
-            "Currently Airing" -> SAnime.ONGOING
-            "Finished Airing" -> SAnime.COMPLETED
-            else -> SAnime.UNKNOWN
-        }
+    protected fun parseStatus(statusString: String?): Int = when (statusString) {
+        "Currently Airing" -> SAnime.ONGOING
+        "Finished Airing" -> SAnime.COMPLETED
+        else -> SAnime.UNKNOWN
     }
 
     // ============================== Episodes ==============================
@@ -190,7 +208,7 @@ abstract class ZoroTheme(
         episode_number = element.attr("data-number").toFloatOrNull() ?: 1F
         name = "Ep. ${element.attr("data-number")}: ${element.attr("title")}"
         setUrlWithoutDomain(element.attr("href"))
-        if (element.hasClass("ssl-item-filler") && markFiller) {
+        if (element.hasClass("ssl-item-filler") && preferences.markFiller) {
             scanlator = "Filler Episode"
         }
     }
@@ -236,7 +254,6 @@ abstract class ZoroTheme(
         }.flatten()
 
         return embedLinks.parallelCatchingFlatMap(::extractVideo)
-            .sort()
     }
 
     abstract fun extractVideo(server: VideoData): List<Video>
@@ -250,6 +267,7 @@ abstract class ZoroTheme(
     // ============================= Utilities ==============================
 
     private fun SharedPreferences.clearOldHosts(): SharedPreferences {
+        val hostToggle = getStringSet(PREF_HOSTER_KEY, hosterNames.toSet()) ?: return this
         if (hostToggle.all { hosterNames.contains(it) }) {
             return this
         }
@@ -263,9 +281,7 @@ abstract class ZoroTheme(
         return this
     }
 
-    private fun Set<String>.contains(s: String, ignoreCase: Boolean): Boolean {
-        return any { it.equals(s, ignoreCase) }
-    }
+    private fun Set<String>.contains(s: String, ignoreCase: Boolean): Boolean = any { it.equals(s, ignoreCase) }
 
     private fun apiHeaders(referer: String): Headers = headers.newBuilder().apply {
         add("Accept", "*/*")
@@ -283,41 +299,41 @@ abstract class ZoroTheme(
 
     override fun List<Video>.sort(): List<Video> {
         val quality = preferences.prefQuality
-        val lang = preferences.prefLang
+        val type = preferences.prefType
         val server = preferences.prefServer
 
         return this.sortedWith(
             compareByDescending<Video> { it.quality.contains(quality) }
                 .thenByDescending { it.quality.contains(server, true) }
-                .thenByDescending { it.quality.contains(lang, true) },
+                .thenByDescending { it.quality.contains(type, true) },
         )
     }
 
-    private val SharedPreferences.getTitleLang
-        get() = getString(PREF_TITLE_LANG_KEY, PREF_TITLE_LANG_DEFAULT)!!
+    private var SharedPreferences.getTitleLang
+        by LazyMutable { preferences.getString(PREF_TITLE_LANG_KEY, PREF_TITLE_LANG_DEFAULT)!! }
 
-    private val SharedPreferences.markFiller
-        get() = getBoolean(MARK_FILLERS_KEY, MARK_FILLERS_DEFAULT)
+    private var SharedPreferences.markFiller
+        by LazyMutable { preferences.getBoolean(MARK_FILLERS_KEY, MARK_FILLERS_DEFAULT) }
 
-    private val SharedPreferences.prefQuality
-        get() = getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
+    private var SharedPreferences.prefQuality
+        by LazyMutable { preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!! }
 
-    private val SharedPreferences.prefServer
-        get() = getString(PREF_SERVER_KEY, hosterNames.first())!!
+    private var SharedPreferences.prefServer
+        by LazyMutable { preferences.getString(PREF_SERVER_KEY, hosterNames.first())!! }
 
-    private val SharedPreferences.prefLang
-        get() = getString(PREF_LANG_KEY, PREF_LANG_DEFAULT)!!
+    private var SharedPreferences.prefType
+        by LazyMutable { preferences.getString(PREF_TYPE_KEY, PREF_TYPE_DEFAULT)!! }
 
-    private val SharedPreferences.hostToggle
-        get() = getStringSet(PREF_HOSTER_KEY, hosterNames.toSet())!!
+    private var SharedPreferences.hostToggle
+        by LazyMutable { preferences.getStringSet(PREF_HOSTER_KEY, hosterNames.toSet())!! }
 
-    private val SharedPreferences.typeToggle
-        get() = getStringSet(PREF_TYPE_TOGGLE_KEY, PREF_TYPES_TOGGLE_DEFAULT)!!
+    private var SharedPreferences.typeToggle
+        by LazyMutable { preferences.getStringSet(PREF_TYPE_TOGGLE_KEY, PREF_TYPES_TOGGLE_DEFAULT)!! }
 
     companion object {
         private const val PREF_TITLE_LANG_KEY = "preferred_title_lang"
         private const val PREF_TITLE_LANG_DEFAULT = "Romaji"
-        private val PREF_TITLE_LANG_LIST = arrayOf("Romaji", "English")
+        private val PREF_TITLE_LANG_LIST = listOf("Romaji", "English")
 
         private const val MARK_FILLERS_KEY = "mark_fillers"
         private const val MARK_FILLERS_DEFAULT = true
@@ -325,121 +341,96 @@ abstract class ZoroTheme(
         private const val PREF_QUALITY_KEY = "preferred_quality"
         private const val PREF_QUALITY_DEFAULT = "1080"
 
-        private const val PREF_LANG_KEY = "preferred_language"
-        private const val PREF_LANG_DEFAULT = "Sub"
+        private const val PREF_TYPE_KEY = "preferred_type"
+        private const val PREF_TYPE_DEFAULT = "Sub"
 
         private const val PREF_SERVER_KEY = "preferred_server"
 
         private const val PREF_HOSTER_KEY = "hoster_selection"
 
         private const val PREF_TYPE_TOGGLE_KEY = "type_selection"
-        private val TYPES_ENTRIES = arrayOf("Sub", "Dub", "Mixed", "Raw")
-        private val TYPES_ENTRY_VALUES = arrayOf("servers-sub", "servers-dub", "servers-mixed", "servers-raw")
+        private val TYPES_ENTRIES = listOf("Sub", "Dub", "Mixed", "Raw")
+        private val TYPES_ENTRY_VALUES = listOf("servers-sub", "servers-dub", "servers-mixed", "servers-raw")
         private val PREF_TYPES_TOGGLE_DEFAULT = TYPES_ENTRY_VALUES.toSet()
     }
 
     // ============================== Settings ==============================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        ListPreference(screen.context).apply {
-            key = PREF_TITLE_LANG_KEY
-            title = "Preferred title language"
-            entries = PREF_TITLE_LANG_LIST
-            entryValues = PREF_TITLE_LANG_LIST
-            setDefaultValue(PREF_TITLE_LANG_DEFAULT)
-            summary = "%s"
+        screen.addListPreference(
+            key = PREF_TITLE_LANG_KEY,
+            title = "Preferred title language",
+            entries = PREF_TITLE_LANG_LIST,
+            entryValues = PREF_TITLE_LANG_LIST,
+            default = PREF_TITLE_LANG_DEFAULT,
+            summary = "%s",
+        ) {
+            preferences.getTitleLang = it
+            useEnglish = it == "English"
+        }
 
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                Toast.makeText(screen.context, "Restart Aniyomi to apply new setting.", Toast.LENGTH_LONG).show()
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
+        screen.addSwitchPreference(
+            key = MARK_FILLERS_KEY,
+            title = "Mark filler episodes",
+            summary = "Mark filler episodes in the episode list",
+            default = MARK_FILLERS_DEFAULT,
+        ) {
+            preferences.markFiller = it
+        }
 
-        SwitchPreferenceCompat(screen.context).apply {
-            key = MARK_FILLERS_KEY
-            title = "Mark filler episodes"
-            setDefaultValue(MARK_FILLERS_DEFAULT)
-            setOnPreferenceChangeListener { _, newValue ->
-                Toast.makeText(screen.context, "Restart Aniyomi to apply new setting.", Toast.LENGTH_LONG).show()
-                preferences.edit().putBoolean(key, newValue as Boolean).commit()
-            }
-        }.also(screen::addPreference)
+        screen.addListPreference(
+            key = PREF_QUALITY_KEY,
+            title = "Preferred quality",
+            entries = listOf("1080p", "720p", "480p", "360p"),
+            entryValues = listOf("1080", "720", "480", "360"),
+            default = PREF_QUALITY_DEFAULT,
+            summary = "%s",
+        ) {
+            preferences.prefQuality = it
+        }
 
-        ListPreference(screen.context).apply {
-            key = PREF_QUALITY_KEY
-            title = "Preferred quality"
-            entries = arrayOf("1080p", "720p", "480p", "360p")
-            entryValues = arrayOf("1080", "720", "480", "360")
-            setDefaultValue(PREF_QUALITY_DEFAULT)
-            summary = "%s"
+        screen.addListPreference(
+            key = PREF_SERVER_KEY,
+            title = "Preferred Server",
+            entries = hosterNames,
+            entryValues = hosterNames,
+            default = hosterNames.first(),
+            summary = "%s",
+        ) {
+            preferences.prefServer = it
+        }
 
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
+        screen.addListPreference(
+            key = PREF_TYPE_KEY,
+            title = "Preferred Type",
+            entries = TYPES_ENTRIES,
+            entryValues = TYPES_ENTRIES,
+            default = PREF_TYPE_DEFAULT,
+            summary = "%s",
+        ) {
+            preferences.prefType = it
+        }
 
-        ListPreference(screen.context).apply {
-            key = PREF_SERVER_KEY
-            title = "Preferred Server"
-            entries = hosterNames.toTypedArray()
-            entryValues = hosterNames.toTypedArray()
-            setDefaultValue(hosterNames.first())
-            summary = "%s"
+        screen.addSetPreference(
+            key = PREF_HOSTER_KEY,
+            title = "Enable/Disable Hosts",
+            summary = "Select which video hosts to show in the episode list",
+            entries = hosterNames,
+            entryValues = hosterNames,
+            default = hosterNames.toSet(),
+        ) {
+            preferences.hostToggle = it
+        }
 
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
-
-        ListPreference(screen.context).apply {
-            key = PREF_LANG_KEY
-            title = "Preferred Type"
-            entries = TYPES_ENTRIES
-            entryValues = TYPES_ENTRIES
-            setDefaultValue(PREF_LANG_DEFAULT)
-            summary = "%s"
-
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
-            }
-        }.also(screen::addPreference)
-
-        MultiSelectListPreference(screen.context).apply {
-            key = PREF_HOSTER_KEY
-            title = "Enable/Disable Hosts"
-            entries = hosterNames.toTypedArray()
-            entryValues = hosterNames.toTypedArray()
-            setDefaultValue(hosterNames.toSet())
-
-            setOnPreferenceChangeListener { _, newValue ->
-                @Suppress("UNCHECKED_CAST")
-                preferences.edit().putStringSet(key, newValue as Set<String>).commit()
-            }
-        }.also(screen::addPreference)
-
-        MultiSelectListPreference(screen.context).apply {
-            key = PREF_TYPE_TOGGLE_KEY
-            title = "Enable/Disable Types"
-            entries = TYPES_ENTRIES
-            entryValues = TYPES_ENTRY_VALUES
-            setDefaultValue(PREF_TYPES_TOGGLE_DEFAULT)
-
-            setOnPreferenceChangeListener { _, newValue ->
-                @Suppress("UNCHECKED_CAST")
-                preferences.edit().putStringSet(key, newValue as Set<String>).commit()
-            }
-        }.also(screen::addPreference)
+        screen.addSetPreference(
+            key = PREF_TYPE_TOGGLE_KEY,
+            title = "Enable/Disable Types",
+            summary = "Select which video types to show in the episode list",
+            entries = TYPES_ENTRIES,
+            entryValues = TYPES_ENTRY_VALUES,
+            default = PREF_TYPES_TOGGLE_DEFAULT,
+        ) {
+            preferences.typeToggle = it
+        }
     }
 }

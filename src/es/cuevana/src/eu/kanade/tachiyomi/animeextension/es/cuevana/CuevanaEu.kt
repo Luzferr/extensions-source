@@ -1,9 +1,15 @@
 package eu.kanade.tachiyomi.animeextension.es.cuevana
 
-import android.app.Application
-import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import aniyomi.lib.doodextractor.DoodExtractor
+import aniyomi.lib.filemoonextractor.FilemoonExtractor
+import aniyomi.lib.okruextractor.OkruExtractor
+import aniyomi.lib.streamtapeextractor.StreamTapeExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
+import aniyomi.lib.universalextractor.UniversalExtractor
+import aniyomi.lib.voeextractor.VoeExtractor
+import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animeextension.es.cuevana.models.AnimeEpisodesList
 import eu.kanade.tachiyomi.animeextension.es.cuevana.models.PopularAnimeList
 import eu.kanade.tachiyomi.animeextension.es.cuevana.models.Server
@@ -16,27 +22,23 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
-import eu.kanade.tachiyomi.lib.doodextractor.DoodExtractor
-import eu.kanade.tachiyomi.lib.filemoonextractor.FilemoonExtractor
-import eu.kanade.tachiyomi.lib.okruextractor.OkruExtractor
-import eu.kanade.tachiyomi.lib.streamtapeextractor.StreamTapeExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
-import eu.kanade.tachiyomi.lib.universalextractor.UniversalExtractor
-import eu.kanade.tachiyomi.lib.vidhideextractor.VidHideExtractor
-import eu.kanade.tachiyomi.lib.voeextractor.VoeExtractor
-import eu.kanade.tachiyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.flatMapCatching
+import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.tryParse
+import keiyoushi.utils.useAsJsoup
 import kotlinx.serialization.json.Json
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 import java.text.SimpleDateFormat
+import java.util.Locale
 
-class CuevanaEu(override val name: String, override val baseUrl: String) : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
+class CuevanaEu(override val name: String, override val baseUrl: String) :
+    ParsedAnimeHttpSource(),
+    ConfigurableAnimeSource {
 
     override val lang = "es"
 
@@ -46,9 +48,7 @@ class CuevanaEu(override val name: String, override val baseUrl: String) : Confi
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    private val preferences by getPreferencesLazy()
 
     companion object {
         private const val PREF_LANGUAGE_KEY = "preferred_language"
@@ -81,7 +81,7 @@ class CuevanaEu(override val name: String, override val baseUrl: String) : Confi
         val script = document.selectFirst("script:containsData({\"props\":{\"pageProps\":{)")!!.data()
 
         val responseJson = json.decodeFromString<PopularAnimeList>(script)
-        responseJson.props?.pageProps?.movies?.map { animeItem ->
+        responseJson.props?.pageProps?.movies?.forEach { animeItem ->
             val anime = SAnime.create()
             val preSlug = animeItem.url?.slug ?: ""
             val type = if (preSlug.startsWith("series")) "ver-serie" else "ver-pelicula"
@@ -104,13 +104,12 @@ class CuevanaEu(override val name: String, override val baseUrl: String) : Confi
         if (response.request.url.toString().contains("/ver-serie/")) {
             val script = document.selectFirst("script:containsData({\"props\":{\"pageProps\":{)")!!.data()
             val responseJson = json.decodeFromString<AnimeEpisodesList>(script)
-            responseJson.props?.pageProps?.thisSerie?.seasons?.map {
-                it.episodes.map { ep ->
+            responseJson.props?.pageProps?.thisSerie?.seasons?.forEach {
+                it.episodes.forEach { ep ->
                     val episode = SEpisode.create()
-                    val epDate = runCatching {
-                        ep.releaseDate.orEmpty().substringBefore("T").let { date -> SimpleDateFormat("yyyy-MM-dd").parse(date) }?.time
-                    }.getOrDefault(0)
-                    episode.date_upload = epDate ?: 0L
+                    ep.releaseDate?.substringBefore("T")?.let { date ->
+                        episode.date_upload = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).tryParse(date)
+                    }
                     episode.name = "T${ep.slug?.season} - Episodio ${ep.slug?.episode}"
                     episode.episode_number = ep.number?.toFloat()!!
                     episode.setUrlWithoutDomain("/episodio/${ep.slug?.name}-temporada-${ep.slug?.season}-episodio-${ep.slug?.episode}")
@@ -134,53 +133,70 @@ class CuevanaEu(override val name: String, override val baseUrl: String) : Confi
 
     override fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
-        val videoList = mutableListOf<Video>()
         val script = document.selectFirst("script:containsData({\"props\":{\"pageProps\":{)")!!.data()
         val responseJson = json.decodeFromString<AnimeEpisodesList>(script)
-        if (response.request.url.toString().contains("/episodio/")) {
-            serverIterator(responseJson.props?.pageProps?.episode?.videos).also(videoList::addAll)
+        return if (response.request.url.toString().contains("/episodio/")) {
+            responseJson.props?.pageProps?.episode?.videos?.let(::serverIterator)
         } else {
-            serverIterator(responseJson.props?.pageProps?.thisMovie?.videos).also(videoList::addAll)
+            responseJson.props?.pageProps?.thisMovie?.videos?.let(::serverIterator)
+        } ?: emptyList()
+    }
+
+    private fun serverIterator(videos: Videos): List<Video> = listOf(
+        videos.latino to "[LAT]",
+        videos.spanish to "[CAST]",
+        videos.english to "[ENG]",
+        videos.japanese to "[JAP]",
+    ).map { (list, lang) ->
+        list.mapNotNull { it.result } to lang
+    }.flatMap { (list, lang) ->
+        list.flatMapCatching { server ->
+            val body = client.newCall(GET(server)).execute().useAsJsoup()
+            val url = body.selectFirst("script:containsData(var message)")?.data()
+                ?.substringAfter("var url = '")?.substringBefore("'") ?: ""
+            loadExtractor(url, lang)
         }
-        return videoList
     }
 
-    private fun serverIterator(videos: Videos?): MutableList<Video> {
-        val videoList = mutableListOf<Video>()
-        videos?.latino?.getVideos("[LAT]").takeIf { it?.isNotEmpty() == true }?.also(videoList::addAll)
-        videos?.spanish?.getVideos("[CAST]").takeIf { it?.isNotEmpty() == true }?.also(videoList::addAll)
-        videos?.english?.getVideos("[ENG]").takeIf { it?.isNotEmpty() == true }?.also(videoList::addAll)
-        videos?.japanese?.getVideos("[JAP]").takeIf { it?.isNotEmpty() == true }?.also(videoList::addAll)
-        return videoList
-    }
-
-    /*--------------------------------Video extractors------------------------------------*/
-    private val vidHideExtractor by lazy { VidHideExtractor(client, headers) }
-    private val yourUploadExtractor by lazy { YourUploadExtractor(client) }
-    private val doodExtractor by lazy { DoodExtractor(client) }
-    private val okruExtractor by lazy { OkruExtractor(client) }
-    private val voeExtractor by lazy { VoeExtractor(client, headers) }
-    private val streamTapeExtractor by lazy { StreamTapeExtractor(client) }
-    private val streamWishExtractor by lazy { StreamWishExtractor(client, headers) }
-    private val filemoonExtractor by lazy { FilemoonExtractor(client) }
-    private val universalExtractor by lazy { UniversalExtractor(client) }
-
-    private fun loadExtractor(url: String, prefix: String = "", serverName: String? = ""): List<Video> {
-        return runCatching {
-            val source = serverName?.ifEmpty { url } ?: url
-            val matched = conventions.firstOrNull { (_, names) -> names.any { it.lowercase() in source.lowercase() } }?.first
-            when (matched) {
-                "voe" -> voeExtractor.videosFromUrl(url, "$prefix ")
-                "okru" -> okruExtractor.videosFromUrl(url, prefix)
-                "filemoon" -> filemoonExtractor.videosFromUrl(url, prefix = "$prefix Filemoon:")
-                "streamwish" -> streamWishExtractor.videosFromUrl(url, videoNameGen = { "$prefix StreamWish:$it" })
-                "doodstream" -> doodExtractor.videosFromUrl(url, "$prefix DoodStream")
-                "yourupload" -> yourUploadExtractor.videoFromUrl(url, headers = headers, prefix = "$prefix ")
-                "streamtape" -> streamTapeExtractor.videosFromUrl(url, quality = "$prefix StreamTape")
-                "vidhide" -> vidHideExtractor.videosFromUrl(url, videoNameGen = { "$prefix VidHide:$it" })
-                else -> universalExtractor.videosFromUrl(url, headers, prefix = "$prefix ")
+    private fun loadExtractor(url: String, prefix: String = ""): List<Video> {
+        val embedUrl = url.lowercase()
+        return when {
+            embedUrl.contains("yourupload") -> {
+                YourUploadExtractor(client).videoFromUrl(url, headers = headers)
             }
-        }.getOrDefault(emptyList())
+
+            embedUrl.contains("doodstream") || embedUrl.contains("dood.") -> {
+                DoodExtractor(client).videoFromUrl(url, "$prefix DoodStream")?.let(::listOf)
+            }
+
+            embedUrl.contains("okru") || embedUrl.contains("ok.ru") -> {
+                OkruExtractor(client).videosFromUrl(url, prefix, true)
+            }
+
+            embedUrl.contains("voe") -> {
+                VoeExtractor(client, headers).videosFromUrl(url, prefix)
+            }
+
+            embedUrl.contains("streamtape") -> {
+                StreamTapeExtractor(client).videoFromUrl(url, "$prefix StreamTape")?.let(::listOf)
+            }
+
+            embedUrl.contains("wishembed") || embedUrl.contains("streamwish") || embedUrl.contains("wish") -> {
+                StreamWishExtractor(client, headers).videosFromUrl(url) { "$prefix StreamWish:$it" }
+            }
+
+            embedUrl.contains("filemoon") || embedUrl.contains("moonplayer") -> {
+                FilemoonExtractor(client).videosFromUrl(url, "$prefix Filemoon:")
+            }
+
+            embedUrl.contains("filelions") || embedUrl.contains("lion") -> {
+                StreamWishExtractor(client, headers).videosFromUrl(url, videoNameGen = { "$prefix FileLions:$it" })
+            }
+
+            else -> {
+                UniversalExtractor(client).videosFromUrl(url, headers, prefix = prefix)
+            }
+        } ?: emptyList()
     }
 
     private val conventions = listOf(
@@ -276,30 +292,30 @@ class CuevanaEu(override val name: String, override val baseUrl: String) : Confi
         GenreFilter(),
     )
 
-    private class GenreFilter : UriPartFilter(
-        "Tipos",
-        arrayOf(
-            Pair("<selecionar>", ""),
-            Pair("Series", "series/estrenos"),
-            Pair("Acción", "genero/accion"),
-            Pair("Aventura", "genero/aventura"),
-            Pair("Animación", "genero/animacion"),
-            Pair("Ciencia Ficción", "genero/ciencia-ficcion"),
-            Pair("Comedia", "genero/comedia"),
-            Pair("Crimen", "genero/crimen"),
-            Pair("Documentales", "genero/documental"),
-            Pair("Drama", "genero/drama"),
-            Pair("Familia", "genero/familia"),
-            Pair("Fantasía", "genero/fantasia"),
-            Pair("Misterio", "genero/misterio"),
-            Pair("Romance", "genero/romance"),
-            Pair("Suspenso", "genero/suspense"),
-            Pair("Terror", "genero/terror"),
-        ),
-    )
+    private class GenreFilter :
+        UriPartFilter(
+            "Tipos",
+            arrayOf(
+                Pair("<selecionar>", ""),
+                Pair("Series", "series/estrenos"),
+                Pair("Acción", "genero/accion"),
+                Pair("Aventura", "genero/aventura"),
+                Pair("Animación", "genero/animacion"),
+                Pair("Ciencia Ficción", "genero/ciencia-ficcion"),
+                Pair("Comedia", "genero/comedia"),
+                Pair("Crimen", "genero/crimen"),
+                Pair("Documentales", "genero/documental"),
+                Pair("Drama", "genero/drama"),
+                Pair("Familia", "genero/familia"),
+                Pair("Fantasía", "genero/fantasia"),
+                Pair("Misterio", "genero/misterio"),
+                Pair("Romance", "genero/romance"),
+                Pair("Suspenso", "genero/suspense"),
+                Pair("Terror", "genero/terror"),
+            ),
+        )
 
-    private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) :
-        AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
+    private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
         fun toUriPart() = vals[state].second
     }
 

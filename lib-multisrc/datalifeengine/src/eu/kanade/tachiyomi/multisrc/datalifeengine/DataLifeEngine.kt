@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.multisrc.datalifeengine
 
-import android.app.Application
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
@@ -14,6 +13,7 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.getPreferencesLazy
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -21,18 +21,17 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 
 abstract class DataLifeEngine(
     override val name: String,
     override val baseUrl: String,
     override val lang: String,
-) : ConfigurableAnimeSource, ParsedAnimeHttpSource() {
+) : ParsedAnimeHttpSource(),
+    ConfigurableAnimeSource {
 
     override val supportsLatest = false
 
-    private val preferences by lazy { Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000) }
+    private val preferences by getPreferencesLazy()
 
     // ============================== Popular ===============================
 
@@ -40,12 +39,10 @@ abstract class DataLifeEngine(
 
     override fun popularAnimeNextPageSelector(): String = "span.navigation > span:not(.nav_ext) + a"
 
-    override fun popularAnimeFromElement(element: Element): SAnime {
-        return SAnime.create().apply {
-            setUrlWithoutDomain(element.selectFirst("a[href]")!!.attr("href").toHttpUrl().encodedPath)
-            thumbnail_url = element.selectFirst("img[src]")?.absUrl("src") ?: ""
-            title = "${element.selectFirst("a[href]")!!.text()} ${element.selectFirst("span.block-sai")?.text() ?: ""}"
-        }
+    override fun popularAnimeFromElement(element: Element): SAnime = SAnime.create().apply {
+        setUrlWithoutDomain(element.selectFirst("a[href]")!!.attr("href").toHttpUrl().encodedPath)
+        thumbnail_url = element.selectFirst("img[src]")?.absUrl("src") ?: ""
+        title = "${element.selectFirst("a[href]")!!.text()} ${element.selectFirst("span.block-sai")?.text() ?: ""}"
     }
 
     // =============================== Latest ===============================
@@ -87,12 +84,15 @@ abstract class DataLifeEngine(
                     POST("$baseUrl/index.php?do=search", body = postBody, headers = postHeaders)
                 }
             }
+
             genreFilter.state != 0 -> {
                 GET("$baseUrl${genreFilter.toUriPart()}page/$page/")
             }
+
             subPageFilter.state != 0 -> {
                 GET("$baseUrl${subPageFilter.toUriPart()}page/$page/")
             }
+
             else -> popularAnimeRequest(page)
         }
     }
@@ -115,29 +115,28 @@ abstract class DataLifeEngine(
         GenreFilter(genres),
     )
 
-    private class SubPageFilter(categories: Array<Pair<String, String>>) : UriPartFilter(
-        "Catégories",
-        categories,
-    )
+    private class SubPageFilter(categories: Array<Pair<String, String>>) :
+        UriPartFilter(
+            "Catégories",
+            categories,
+        )
 
-    private class GenreFilter(genres: Array<Pair<String, String>>) : UriPartFilter(
-        "Genres",
-        genres,
-    )
+    private class GenreFilter(genres: Array<Pair<String, String>>) :
+        UriPartFilter(
+            "Genres",
+            genres,
+        )
 
-    private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) :
-        AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
+    private open class UriPartFilter(displayName: String, val vals: Array<Pair<String, String>>) : AnimeFilter.Select<String>(displayName, vals.map { it.first }.toTypedArray()) {
         fun toUriPart() = vals[state].second
     }
     // =========================== Anime Details ============================
 
-    override suspend fun getAnimeDetails(anime: SAnime): SAnime {
-        return client.newCall(animeDetailsRequest(anime))
-            .awaitSuccess()
-            .let { response ->
-                animeDetailsParse(response, anime).apply { initialized = true }
-            }
-    }
+    override suspend fun getAnimeDetails(anime: SAnime): SAnime = client.newCall(animeDetailsRequest(anime))
+        .awaitSuccess()
+        .let { response ->
+            animeDetailsParse(response, anime).apply { initialized = true }
+        }
 
     override fun animeDetailsParse(document: Document): SAnime = throw UnsupportedOperationException()
 
