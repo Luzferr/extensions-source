@@ -9,9 +9,11 @@ import eu.kanade.tachiyomi.animeextension.en.animepahe.dto.EpisodeDto
 import eu.kanade.tachiyomi.animeextension.en.animepahe.dto.LatestAnimeDto
 import eu.kanade.tachiyomi.animeextension.en.animepahe.dto.ResponseDto
 import eu.kanade.tachiyomi.animeextension.en.animepahe.dto.SearchResultDto
+import eu.kanade.tachiyomi.animeextension.en.animepahe.kwik.KwikExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -28,8 +30,10 @@ import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 import java.util.Locale
+import kotlin.getValue
 import kotlin.math.ceil
 import kotlin.math.floor
 
@@ -44,6 +48,8 @@ class AnimePahe : ConfigurableAnimeSource, AnimeHttpSource() {
     override val client = network.client.newBuilder()
         .addInterceptor(interceptor)
         .build()
+
+    private val appCtx: Application by injectLazy()
 
     override val name = "AnimePahe"
 
@@ -83,10 +89,10 @@ class AnimePahe : ConfigurableAnimeSource, AnimeHttpSource() {
         val document = response.asJsoup()
         return SAnime.create().apply {
             title = document.selectFirst("div.title-wrapper > h1 > span")!!.text()
-            author = document.selectFirst("div.col-sm-4.anime-info p:contains(Studio:)")
+            author = document.selectFirst("div.col-sm-4.anime-info p:contains(Studios:)")
                 ?.text()
-                ?.replace("Studio: ", "")
-            status = parseStatus(document.selectFirst("div.col-sm-4.anime-info p:contains(Status:) a")!!.text())
+                ?.replace("Studios: ", "")
+            status = parseStatus(document.selectFirst("div.col-sm-4.anime-info p:contains(Status:) strong")?.text()?.replace("Status: ", ""))
             thumbnail_url = document.selectFirst("div.anime-poster a")!!.attr("href")
             genre = document.select("div.anime-genre ul li").joinToString { it.text() }
             val synonyms = document.selectFirst("div.col-sm-4.anime-info p:contains(Synonyms:)")
@@ -165,6 +171,64 @@ class AnimePahe : ConfigurableAnimeSource, AnimeHttpSource() {
             .reversed()
     }
 
+    override fun seasonListParse(response: Response): List<SAnime> {
+        return emptyList()
+    }
+
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val document = response.asJsoup()
+        val downloadLinks = document.select("div#pickDownload > a")
+
+        val targetQuality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)?.toIntOrNull() ?: 0
+        val useHLSLink = preferences.getBoolean(PREF_LINK_TYPE_KEY, PREF_LINK_TYPE_DEFAULT)
+
+        val videos = document.select("div#resolutionMenu > button").mapIndexedNotNull { index, btn ->
+            val qualityStr = btn.text()
+            val quality = qualityStr.split("·").getOrNull(1)
+                ?.trim()
+                ?.takeWhile { it.isDigit() }
+                ?.toIntOrNull()
+
+            val isPreferred = quality == targetQuality
+            val kwikLink = btn.attr("data-src")
+            val paheWinLink = downloadLinks.getOrNull(index)?.attr("href") ?: ""
+
+            if (useHLSLink) {
+                Video(
+                    videoUrl = kwikLink,
+                    videoTitle = qualityStr,
+                    resolution = quality,
+                    headers = Headers.headersOf("referer", "https://kwik.cx/"),
+                    preferred = isPreferred,
+                )
+            } else {
+                Video(
+                    videoUrl = paheWinLink,
+                    videoTitle = qualityStr,
+                    resolution = quality,
+                    preferred = isPreferred,
+                )
+            }
+        }
+
+        return listOf(Hoster(baseUrl, name, videos))
+    }
+
+    override fun List<Video>.sortVideos(): List<Video> {
+        val subPreference = preferences.getString(PREF_SUB_KEY, PREF_SUB_DEFAULT)!!
+        val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
+        val shouldBeAv1 = preferences.getBoolean(PREF_AV1_KEY, PREF_AV1_DEFAULT)
+        val shouldEndWithEng = subPreference == "eng"
+
+        return this.sortedWith(
+            compareBy(
+                { it.videoTitle.contains(quality) },
+                { Regex("""\beng\b""").containsMatchIn(it.videoTitle.lowercase()) == shouldEndWithEng },
+                { it.videoTitle.lowercase().contains("av1") == shouldBeAv1 },
+            ),
+        ).reversed()
+    }
+
     private fun parseEpisodePage(episodes: List<EpisodeDto>, animeSession: String): MutableList<SEpisode> {
         return episodes.map { episode ->
             SEpisode.create().apply {
@@ -201,45 +265,27 @@ class AnimePahe : ConfigurableAnimeSource, AnimeHttpSource() {
     }
 
     // ============================ Video Links =============================
-    override fun videoListParse(response: Response): List<Video> {
-        val document = response.asJsoup()
-        val downloadLinks = document.select("div#pickDownload > a")
-        return document.select("div#resolutionMenu > button").mapIndexed { index, btn ->
-            val kwikLink = btn.attr("data-src")
-            val quality = btn.text()
-            val paheWinLink = downloadLinks[index].attr("href")
-            getVideo(paheWinLink, kwikLink, quality)
-        }
-    }
+    override suspend fun resolveVideo(video: Video): Video? {
+        val useHLS = preferences.getBoolean(PREF_LINK_TYPE_KEY, PREF_LINK_TYPE_DEFAULT)
+        val extractor = KwikExtractor(client)
 
-    private fun getVideo(paheUrl: String, kwikUrl: String, quality: String): Video {
-        return if (preferences.getBoolean(PREF_LINK_TYPE_KEY, PREF_LINK_TYPE_DEFAULT)) {
-            val videoUrl = KwikExtractor(client).getHlsStreamUrl(kwikUrl, referer = baseUrl)
-            Video(
-                videoUrl,
-                quality,
-                videoUrl,
-                headers = Headers.headersOf("referer", "https://kwik.cx"),
+        try {
+            val resolvedUrl = if (useHLS) {
+                extractor.getHlsStreamUrl(video.videoUrl, referer = baseUrl)
+            } else {
+                extractor.getStreamUrlFromKwik(appCtx, video.videoUrl)
+            }
+
+            return Video(
+                videoUrl = resolvedUrl,
+                videoTitle = video.videoTitle,
+                resolution = video.resolution,
+                headers = Headers.headersOf("referer", "https://kwik.cx/"),
+                preferred = video.preferred,
             )
-        } else {
-            val videoUrl = KwikExtractor(client).getStreamUrlFromKwik(paheUrl)
-            Video(videoUrl, quality, videoUrl)
+        } catch (e: Exception) {
+            return null
         }
-    }
-
-    override fun List<Video>.sort(): List<Video> {
-        val subPreference = preferences.getString(PREF_SUB_KEY, PREF_SUB_DEFAULT)!!
-        val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
-        val shouldBeAv1 = preferences.getBoolean(PREF_AV1_KEY, PREF_AV1_DEFAULT)
-        val shouldEndWithEng = subPreference == "eng"
-
-        return this.sortedWith(
-            compareBy(
-                { it.quality.contains(quality) },
-                { Regex("""\beng\b""").containsMatchIn(it.quality.lowercase()) == shouldEndWithEng },
-                { it.quality.lowercase().contains("av1") == shouldBeAv1 },
-            ),
-        ).reversed()
     }
 
     // ============================== Settings ==============================
@@ -325,7 +371,7 @@ class AnimePahe : ConfigurableAnimeSource, AnimeHttpSource() {
         return sessionId
     }
 
-    private fun parseStatus(statusString: String): Int {
+    private fun parseStatus(statusString: String?): Int {
         return when (statusString) {
             "Currently Airing" -> SAnime.ONGOING
             "Finished Airing" -> SAnime.COMPLETED
@@ -348,13 +394,13 @@ class AnimePahe : ConfigurableAnimeSource, AnimeHttpSource() {
 
         private const val PREF_QUALITY_KEY = "preffered_quality"
         private const val PREF_QUALITY_TITLE = "Preferred quality"
-        private const val PREF_QUALITY_DEFAULT = "1080p"
-        private val PREF_QUALITY_ENTRIES = arrayOf("1080p", "720p", "360p")
+        private const val PREF_QUALITY_DEFAULT = "1080"
+        private val PREF_QUALITY_ENTRIES = arrayOf("1080", "720", "360")
 
         private const val PREF_DOMAIN_KEY = "preffered_domain"
         private const val PREF_DOMAIN_TITLE = "Preferred domain (requires app restart)"
-        private const val PREF_DOMAIN_DEFAULT = "https://animepahe.si"
-        private val PREF_DOMAIN_ENTRIES = arrayOf("animepahe.si") // Kept only .si haven't removed preffered category for future purpose
+        private const val PREF_DOMAIN_DEFAULT = "https://animepahe.pw"
+        private val PREF_DOMAIN_ENTRIES = arrayOf("animepahe.pw", "animepahe.com", "animepahe.org")
         private val PREF_DOMAIN_VALUES by lazy {
             PREF_DOMAIN_ENTRIES.map { "https://" + it }.toTypedArray()
         }
