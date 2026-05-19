@@ -6,6 +6,7 @@ import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -330,16 +331,26 @@ class AnimeUnity :
         return episodeList.sortedBy { it.episode_number }.reversed()
     }
 
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
     // ============================ Video Links =============================
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    override fun hosterListRequest(episode: SEpisode): Request = GET(baseUrl + episode.url, headers)
+
+    override fun hosterListParse(response: Response): List<Hoster> = listOf(
+        Hoster(hosterName = name, videoList = extractVideoList(response).sortVideos()),
+    )
+
+    override suspend fun getVideoList(hoster: Hoster): List<Video> = hoster.videoList.orEmpty()
+
+    override fun videoListRequest(hoster: Hoster): Request = throw UnsupportedOperationException("Not used")
+
+    override fun videoListParse(response: Response, hoster: Hoster): List<Video> = throw UnsupportedOperationException("Not used")
+
+    private fun extractVideoList(response: Response): List<Video> {
         val videoList = mutableListOf<Video>()
         val doc =
-            client
-                .newCall(
-                    GET(baseUrl + episode.url, headers),
-                ).execute()
-                .asJsoup()
+            response.asJsoup()
         val iframeUrl =
             doc.selectFirst("video-player[embed_url]")?.attr("abs:embed_url")
                 ?: error("Failed to extract iframe")
@@ -394,17 +405,13 @@ class AnimeUnity :
                 videoUrl = videoUrl.replace(filename, "$filename.m3u8")
             }
             val quality = match.groupValues[2]
-            videoList.add(Video(videoUrl, quality, videoUrl))
+            videoList.add(Video(videoUrl = videoUrl, videoTitle = quality))
         }
 
         require(videoList.isNotEmpty()) { "Failed to fetch videos" }
 
         return videoList
     }
-
-    override fun videoListRequest(episode: SEpisode): Request = throw UnsupportedOperationException()
-
-    override fun videoListParse(response: Response): List<Video> = throw UnsupportedOperationException()
 
     // ============================= Utilities ==============================
 
@@ -468,14 +475,14 @@ class AnimeUnity :
         return System.currentTimeMillis()
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
 
         return this
             .sortedWith(
                 compareBy(
-                    { it.quality.contains(quality) },
-                    { it.quality.substringBefore("p").toIntOrNull() ?: 0 },
+                    { it.videoTitle.contains(quality, true) },
+                    { it.videoTitle.substringBefore("p").toIntOrNull() ?: 0 },
                 ),
             ).reversed()
     }

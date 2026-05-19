@@ -20,6 +20,7 @@ import aniyomi.lib.vidhideextractor.VidHideExtractor
 import aniyomi.lib.voeextractor.VoeExtractor
 import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.multisrc.dooplay.DooPlay
 import eu.kanade.tachiyomi.network.GET
@@ -53,18 +54,20 @@ class FlixLatam :
 
     override val episodeMovieText = "Película"
 
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element) = throw UnsupportedOperationException()
+
     override val episodeSeasonPrefix = "Temporada"
     override val prefQualityTitle = "Calidad preferida"
 
-    override fun videoListSelector() = "li.dooplay_player_option" // ul#playeroptionsul
-
     // ============================ Video Links =============================
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
         val players = document.select("ul#playeroptionsul li")
 
         // Iterar sobre cada player
-        return players.parallelCatchingFlatMapBlocking { player ->
+        val videos = players.parallelCatchingFlatMapBlocking { player ->
             val url = getPlayerUrl(player)
                 ?: return@parallelCatchingFlatMapBlocking emptyList()
             if (url.contains("embed69")) {
@@ -77,6 +80,7 @@ class FlixLatam :
                 emptyList()
             }
         }
+        return listOf(Hoster(hosterName = name, videoList = videos))
     }
 
     private suspend fun getPlayerUrl(player: Element): String? {

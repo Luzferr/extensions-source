@@ -9,6 +9,7 @@ import aniyomi.lib.vidhideextractor.VidHideExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -78,20 +79,18 @@ class ANIMEWORLD :
 
     // Video urls
 
-    override fun videoListRequest(episode: SEpisode): Request {
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
+
+    override fun hosterListRequest(episode: SEpisode): Request {
         val iframe = baseUrl + episode.url
         return GET(iframe)
     }
 
-    override fun videoListParse(response: Response): List<Video> {
-        val document = response.asJsoup()
-        return videosFromElement(document)
-    }
-
-    override fun videoListSelector() = "center a[href*=https://doo]," +
-        "center a[href*=streamtape]," +
-        "center a[href*=animeworld.biz]," +
-        "center a[href*=streamingaw.online][id=alternativeDownloadLink]"
+    override fun hosterListParse(response: Response): List<Hoster> = listOf(
+        Hoster(hosterName = name, videoList = videosFromElement(response.asJsoup()).sortVideos()),
+    )
 
     private fun videosFromElement(document: Document): List<Video> {
         // afaik this element appears when videos are taken down, in this case instead of
@@ -131,7 +130,7 @@ class ANIMEWORLD :
             val url2 = server.first
             when {
                 url2.contains("AnimeWorld Server") -> {
-                    listOf(Video(url, "AnimeWorld Server", url))
+                    listOf(Video(videoUrl = url, videoTitle = "AnimeWorld Server"))
                 }
 
                 url.contains("https://doo") -> {
@@ -159,18 +158,14 @@ class ANIMEWORLD :
         return videoList
     }
 
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
-
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString("preferred_quality", "1080")!!
         val server = preferences.getString("preferred_server", "Animeworld server")!!
 
         return sortedWith(
             compareBy(
-                { it.quality.lowercase().contains(server.lowercase()) },
-                { it.quality.lowercase().contains(quality.lowercase()) },
+                { it.videoTitle.lowercase().contains(server.lowercase()) },
+                { it.videoTitle.lowercase().contains(quality.lowercase()) },
             ),
         ).reversed()
     }

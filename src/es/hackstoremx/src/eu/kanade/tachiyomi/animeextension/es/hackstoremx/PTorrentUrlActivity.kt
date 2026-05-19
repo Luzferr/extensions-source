@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.animeextension.all.ptorrent
+package eu.kanade.tachiyomi.animeextension.es.hackstoremx
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
@@ -22,7 +22,7 @@ class PTorrentUrlActivity : Activity() {
             val item = pathSegments[1]
             val mainIntent = Intent().apply {
                 action = "eu.kanade.tachiyomi.ANIMESEARCH"
-                putExtra("query", "${PTorrent.PREFIX_SEARCH}$item")
+                putExtra("query", "${Hackstoremx.PREFIX_SEARCH}$item")
                 putExtra("filter", packageName)
             }
 

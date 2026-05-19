@@ -17,6 +17,7 @@ import eu.kanade.tachiyomi.animeextension.es.katanime.model.EpisodeList
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -199,7 +200,7 @@ class Katanime :
         episodeList to pages
     }.getOrElse { emptyList<SEpisode>() to 1 }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
         val videoList = mutableListOf<Video>()
         document.select("[data-player]:not([data-player-name=\"Mega\"])").forEach { element ->
@@ -222,7 +223,7 @@ class Katanime :
                 serverVideoResolver(decryptedLink, serverTitle).also(videoList::addAll)
             }
         }
-        return videoList
+        return listOf(Hoster(hosterName = name, videoList = videoList.sortVideos()))
     }
 
     private val doodExtractor by lazy { DoodExtractor(client) }

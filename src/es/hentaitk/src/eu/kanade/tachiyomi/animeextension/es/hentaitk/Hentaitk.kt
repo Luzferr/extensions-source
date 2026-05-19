@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -118,9 +119,9 @@ class Hentaitk :
         )
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
-        return if (document.select(".post-tape .page-link").any()) {
+        val videos = if (document.select(".post-tape .page-link").any()) {
             document.select(".post-tape .page-link").parallelCatchingFlatMapBlocking {
                 val urlPage = it.attr("abs:href")
                 val videoDoc = client.newCall(GET(urlPage)).execute().asJsoup()
@@ -132,6 +133,7 @@ class Hentaitk :
                 serverVideoResolver(it.attr("src"))
             }
         }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     /*--------------------------------Video extractors------------------------------------*/

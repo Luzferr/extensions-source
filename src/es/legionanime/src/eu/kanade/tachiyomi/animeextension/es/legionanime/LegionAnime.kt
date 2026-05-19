@@ -239,7 +239,7 @@ class LegionAnime :
         }
     }
 
-    override fun videoListRequest(episode: SEpisode): Request {
+    override fun hosterListRequest(episode: SEpisode): Request {
         val body = FormBody.Builder().add("apyki", API_KEY).build()
         return POST(
             episode.url,

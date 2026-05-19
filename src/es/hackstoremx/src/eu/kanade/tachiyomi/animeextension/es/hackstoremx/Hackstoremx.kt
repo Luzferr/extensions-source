@@ -6,6 +6,24 @@ import android.util.Log
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
+import aniyomi.lib.burstcloudextractor.BurstCloudExtractor
+import aniyomi.lib.doodextractor.DoodExtractor
+import aniyomi.lib.fastreamextractor.FastreamExtractor
+import aniyomi.lib.filemoonextractor.FilemoonExtractor
+import aniyomi.lib.goodstramextractor.GoodStreamExtractor
+import aniyomi.lib.mp4uploadextractor.Mp4uploadExtractor
+import aniyomi.lib.okruextractor.OkruExtractor
+import aniyomi.lib.streamlareextractor.StreamlareExtractor
+import aniyomi.lib.streamsilkextractor.StreamSilkExtractor
+import aniyomi.lib.streamtapeextractor.StreamTapeExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
+import aniyomi.lib.universalextractor.UniversalExtractor
+import aniyomi.lib.upstreamextractor.UpstreamExtractor
+import aniyomi.lib.uqloadextractor.UqloadExtractor
+import aniyomi.lib.vidguardextractor.VidGuardExtractor
+import aniyomi.lib.vidhideextractor.VidHideExtractor
+import aniyomi.lib.voeextractor.VoeExtractor
+import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
@@ -16,27 +34,10 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
-import eu.kanade.tachiyomi.lib.burstcloudextractor.BurstCloudExtractor
-import eu.kanade.tachiyomi.lib.doodextractor.DoodExtractor
-import eu.kanade.tachiyomi.lib.fastreamextractor.FastreamExtractor
-import eu.kanade.tachiyomi.lib.filemoonextractor.FilemoonExtractor
-import eu.kanade.tachiyomi.lib.goodstramextractor.GoodStreamExtractor
-import eu.kanade.tachiyomi.lib.mp4uploadextractor.Mp4uploadExtractor
-import eu.kanade.tachiyomi.lib.okruextractor.OkruExtractor
-import eu.kanade.tachiyomi.lib.streamlareextractor.StreamlareExtractor
-import eu.kanade.tachiyomi.lib.streamsilkextractor.StreamSilkExtractor
-import eu.kanade.tachiyomi.lib.streamtapeextractor.StreamTapeExtractor
-import eu.kanade.tachiyomi.lib.streamwishextractor.StreamWishExtractor
-import eu.kanade.tachiyomi.lib.universalextractor.UniversalExtractor
-import eu.kanade.tachiyomi.lib.upstreamextractor.UpstreamExtractor
-import eu.kanade.tachiyomi.lib.uqloadextractor.UqloadExtractor
-import eu.kanade.tachiyomi.lib.vidguardextractor.VidGuardExtractor
-import eu.kanade.tachiyomi.lib.vidhideextractor.VidHideExtractor
-import eu.kanade.tachiyomi.lib.voeextractor.VoeExtractor
-import eu.kanade.tachiyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parallelCatchingFlatMapBlocking
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -1436,7 +1437,7 @@ class Hackstoremx :
             }
 
             "uqload" -> {
-                val vids = uqloadExtractor.videosFromUrl(url, prefixWithSpace)
+                val vids = runBlocking { uqloadExtractor.videosFromUrl(url, prefixWithSpace) }
                 debugLog { "serverVideoResolver: uqloadExtractor returned ${vids.size} videos for url=$url" }
                 vids
             }
@@ -1449,9 +1450,11 @@ class Hackstoremx :
 
             "streamwish" -> {
                 val vids =
-                    streamWishExtractor.videosFromUrl(url, videoNameGen = { quality ->
-                        buildVideoName(prefixBase, quality)
-                    })
+                    runBlocking {
+                        streamWishExtractor.videosFromUrl(url, videoNameGen = { quality ->
+                            buildVideoName(prefixBase, quality)
+                        })
+                    }
                 debugLog { "serverVideoResolver: streamWishExtractor returned ${vids.size} videos for url=$url" }
                 vids
             }
@@ -1509,9 +1512,11 @@ class Hackstoremx :
 
             "vidhide" -> {
                 val vids =
-                    vidHideExtractor.videosFromUrl(url, videoNameGen = { quality ->
-                        buildVideoName(prefixBase, quality)
-                    })
+                    runBlocking {
+                        vidHideExtractor.videosFromUrl(url, videoNameGen = { quality ->
+                            buildVideoName(prefixBase, quality)
+                        })
+                    }
                 debugLog { "serverVideoResolver: vidHideExtractor returned ${vids.size} videos for url=$url" }
                 vids
             }

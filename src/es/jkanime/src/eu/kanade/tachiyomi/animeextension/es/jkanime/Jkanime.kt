@@ -13,12 +13,11 @@ import aniyomi.lib.universalextractor.UniversalExtractor
 import aniyomi.lib.vidhideextractor.VidHideExtractor
 import aniyomi.lib.voeextractor.VoeExtractor
 import eu.kanade.tachiyomi.animeextension.es.jkanime.extractors.JkanimeExtractor
-import eu.kanade.tachiyomi.animeextension.es.jkanime.models.EpisodeAnimeModel
-import eu.kanade.tachiyomi.animeextension.es.jkanime.models.PopularAnimeModel
-import eu.kanade.tachiyomi.animeextension.es.jkanime.models.ServerAnimeModel
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
+import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -37,8 +36,8 @@ import okhttp3.FormBody
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -200,7 +199,6 @@ class Jkanime :
                 }
             }
         }
-    }
 
         return GET(url.build(), headers)
     }
@@ -293,9 +291,6 @@ class Jkanime :
                 anime.author = animeData.select("a").text()
             }
         }
-        return AnimesPage(animeList, hasNext)
-    }
-
         return anime
     }
 
@@ -416,7 +411,16 @@ class Jkanime :
     private val jkanimeExtractor by lazy { JkanimeExtractor(client) }
     private val universalExtractor by lazy { UniversalExtractor(client) }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = videoListParse(response).sortVideos()
+        return if (videos.isEmpty()) {
+            emptyList()
+        } else {
+            listOf(Hoster(hosterName = name, videoList = videos))
+        }
+    }
+
+    private fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         return getVideoLinks(document).catchingFlatMapBlocking { (url, lang, name) ->
             val matched = serverMatching.firstOrNull { (_, names) -> names.any { it.lowercase() in url.lowercase() } }?.first ?: name.lowercase()

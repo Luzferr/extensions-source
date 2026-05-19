@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.animeextension.it.aniplay.dto.VideoDto
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -155,25 +156,39 @@ class AniPlay :
         }.reversed()
     }
 
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
     // ============================ Video Links =============================
     private val playlistUtils by lazy { PlaylistUtils(client, headers) }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListRequest(episode: SEpisode): Request = GET(baseUrl + episode.url, headers)
+
+    override fun hosterListParse(response: Response): List<Hoster> = listOf(
+        Hoster(hosterName = name, videoList = parseVideoList(response).sortVideos()),
+    )
+
+    override fun videoListRequest(hoster: Hoster): Request = throw UnsupportedOperationException("Not used")
+
+    override fun videoListParse(response: Response, hoster: Hoster): List<Video> = throw UnsupportedOperationException("Not used")
+
+    override suspend fun getVideoList(hoster: Hoster): List<Video> = hoster.videoList.orEmpty()
+
+    private fun parseVideoList(response: Response): List<Video> {
         val script = response.getPageScript()
         val jsonString = script.substringAfter("{episode:").substringBefore(",views") + "}"
         val videoUrl = jsonString.fixJsonString().parseAs<VideoDto>().videoLink
 
         return when {
             videoUrl.contains(".m3u8") -> playlistUtils.extractFromHls(videoUrl)
-            else -> listOf(Video(videoUrl, "Default", videoUrl, headers = headers))
+            else -> listOf(Video(videoUrl = videoUrl, videoTitle = "Default", headers = headers))
         }
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
 
         return sortedWith(
-            compareBy { it.quality.contains(quality) },
+            compareBy { it.videoTitle.contains(quality, true) },
         ).reversed()
     }
 

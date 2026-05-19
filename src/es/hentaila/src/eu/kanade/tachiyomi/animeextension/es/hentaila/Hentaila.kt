@@ -13,9 +13,11 @@ import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animeextension.es.hentaila.extractors.FireLoadExtractor
 import eu.kanade.tachiyomi.animeextension.es.hentaila.extractors.MediaFireExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
+import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimeUpdateStrategy
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -103,27 +105,20 @@ class Hentaila :
             urlBuilder.addQueryParameter("search", query)
         } else {
             val filterList = if (filters.isEmpty()) getFilterList() else filters
-
-            filterList.forEach { filter ->
-                when (filter) {
-                    is GenreFilter -> urlBuilder.addQueryParameter("genre", filter.toUriPart())
-
-                    is OrderFilter -> urlBuilder.addQueryParameter("filter", filter.toUriPart())
-
-                    is StatusOngoingFilter -> if (filter.state) {
-                        urlBuilder.addQueryParameter("status", "emision")
-                    }
-
-                    is StatusCompletedFilter -> if (filter.state) {
-                        urlBuilder.addQueryParameter("status", "finalizado")
-                    }
-
-                    is UncensoredFilter -> if (filter.state) {
-                        urlBuilder.addQueryParameter("uncensored", "")
-                    }
-
-                    else -> {}
-                }
+            filterList.filterIsInstance<GenreFilter>().firstOrNull()
+                ?.takeIf { it.state != 0 }
+                ?.let { urlBuilder.addQueryParameter("genre", it.toUriPart()) }
+            filterList.filterIsInstance<OrderFilter>().firstOrNull()
+                ?.takeIf { it.state != 0 }
+                ?.let { urlBuilder.addQueryParameter("filter", it.toUriPart()) }
+            if (filterList.filterIsInstance<StatusOngoingFilter>().firstOrNull()?.state == true) {
+                urlBuilder.addQueryParameter("status", "emision")
+            }
+            if (filterList.filterIsInstance<StatusCompletedFilter>().firstOrNull()?.state == true) {
+                urlBuilder.addQueryParameter("status", "finalizado")
+            }
+            if (filterList.filterIsInstance<UncensoredFilter>().firstOrNull()?.state == true) {
+                urlBuilder.addQueryParameter("uncensored", "")
             }
         }
         return GET(urlBuilder.build().toString(), headers)
@@ -210,6 +205,7 @@ class Hentaila :
                 name = "Episodio $epNum"
                 url = "/media/$animeId/$epNum"
             }
+            episodes.add(episode)
         }
         return episodes.reversed()
     }
@@ -231,12 +227,12 @@ class Hentaila :
     private val vidhideExtractor by lazy { VidHideExtractor(client, headers) }
     private val universalExtractor by lazy { UniversalExtractor(client) }
 
-    override fun videoListRequest(episode: SEpisode): Request {
+    override fun hosterListRequest(episode: SEpisode): Request {
         val url = "$baseUrl${episode.url}/__data.json"
         return GET(url, headers)
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.parseAs<HentailaJsonDto>()
         val serverList = mutableListOf<VideoData>()
 
@@ -269,7 +265,7 @@ class Hentaila :
             }
         }
 
-        return serverList
+        val videos = serverList
             .partition { it.name.lowercase() == "vip" }
             .let { (vips, others) ->
                 val vipVideos = vips.catchingFlatMapBlocking { vip ->
@@ -306,6 +302,7 @@ class Hentaila :
                 }
                 vipVideos + otherVideos
             }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     private val conventions = listOf(

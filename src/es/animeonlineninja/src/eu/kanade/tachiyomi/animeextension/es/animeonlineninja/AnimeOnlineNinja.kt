@@ -3,6 +3,7 @@ package eu.kanade.tachiyomi.animeextension.es.animeonlineninja
 import androidx.preference.CheckBoxPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
 import aniyomi.lib.doodextractor.DoodExtractor
 import aniyomi.lib.filemoonextractor.FilemoonExtractor
 import aniyomi.lib.mixdropextractor.MixDropExtractor
@@ -58,61 +59,35 @@ class AnimeOnlineNinja :
     override fun popularAnimeParse(response: Response): AnimesPage {
         fetchGenresList()
         val document = response.asJsoup()
-        val animes =
-            document.select(popularAnimeSelector()).map { element ->
-                popularAnimeFromElement(element)
-            }
-
-            params.language.isNotBlank() -> "/genero/${params.language}"
-
-            params.year.isNotBlank() -> "/release/${params.year}"
-
-            params.movie.isNotBlank() -> {
-                if (params.movie == "pelicula") {
-                    "/pelicula"
-                } else {
-                    "/genero/${params.movie}"
-                }
-            }
-
-            else -> buildString {
-                append(
-                    when {
-                        query.isNotBlank() -> "/?s=$query"
-                        params.letter.isNotBlank() -> "/letra/${params.letter}/?"
-                        else -> "/tendencias/?"
-                    },
-                )
-
+        val animes = document.select(popularAnimeSelector()).map(::popularAnimeFromElement)
+        val hasNextPage = document.select(popularAnimeNextPageSelector()).isNotEmpty()
         return AnimesPage(animes, hasNextPage)
     }
 
-    override fun popularAnimeFromElement(element: Element): SAnime =
-        SAnime.create().apply {
-            val img = element.selectFirst("img")!!
-            val url = element.selectFirst("a")?.attr("href") ?: element.attr("href")
+    override fun popularAnimeFromElement(element: Element): SAnime = SAnime.create().apply {
+        val img = element.selectFirst("img")!!
+        val url = element.selectFirst("a")?.attr("href") ?: element.attr("href")
 
-            setUrlWithoutDomain(url)
-            title = img.attr("alt")
-            thumbnail_url = img.getImageUrl()
-            element.selectFirst("div.quality")?.let {
-                description = it.text()
-            }
-            val isSeries = detectIsSeries(url)
-            fetch_type = preferredFetchType(isSeries)
+        setUrlWithoutDomain(url)
+        title = img.attr("alt")
+        thumbnail_url = img.getImageUrl()
+        element.selectFirst("div.quality")?.let {
+            description = it.text()
         }
+        val isSeries = detectIsSeries(url)
+        fetch_type = preferredFetchType(isSeries)
+    }
 
     // =============================== Search ===============================
-    override fun searchAnimeFromElement(element: Element): SAnime =
-        SAnime.create().apply {
-            setUrlWithoutDomain(element.attr("href"))
-            val img = element.selectFirst("img")!!
-            title = img.attr("alt")
-            thumbnail_url = img.getImageUrl()
-            val url = element.attr("href")
-            val isSeries = detectIsSeries(url)
-            fetch_type = preferredFetchType(isSeries)
-        }
+    override fun searchAnimeFromElement(element: Element): SAnime = SAnime.create().apply {
+        setUrlWithoutDomain(element.attr("href"))
+        val img = element.selectFirst("img")!!
+        title = img.attr("alt")
+        thumbnail_url = img.getImageUrl()
+        val url = element.attr("href")
+        val isSeries = detectIsSeries(url)
+        fetch_type = preferredFetchType(isSeries)
+    }
 
     override fun searchAnimeRequest(
         page: Int,
@@ -188,16 +163,15 @@ class AnimeOnlineNinja :
         page: Int,
         query: String,
         filters: AnimeFilterList,
-    ): AnimesPage =
-        if (query.startsWith(PREFIX_SEARCH)) {
-            val path = query.removePrefix(PREFIX_SEARCH)
-            client
-                .newCall(GET("$baseUrl/$path", headers))
-                .awaitSuccess()
-                .use(::searchAnimeByPathParse)
-        } else {
-            super.getSearchAnime(page, query, filters)
-        }
+    ): AnimesPage = if (query.startsWith(PREFIX_SEARCH)) {
+        val path = query.removePrefix(PREFIX_SEARCH)
+        client
+            .newCall(GET("$baseUrl/$path", headers))
+            .awaitSuccess()
+            .use(::searchAnimeByPathParse)
+    } else {
+        super.getSearchAnime(page, query, filters)
+    }
 
     private fun searchAnimeByPathParse(response: Response): AnimesPage {
         val details =
@@ -210,6 +184,10 @@ class AnimeOnlineNinja :
     }
 
     // ============================== Episodes ==============================
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
+
     override val episodeMovieText = "Película"
 
     override fun episodeFromElement(element: Element): SEpisode = throw UnsupportedOperationException()
@@ -217,32 +195,31 @@ class AnimeOnlineNinja :
     override fun episodeFromElement(
         element: Element,
         seasonName: String,
-    ): SEpisode =
-        SEpisode.create().apply {
-            val epNum =
-                element
-                    .selectFirst("div.numerando")!!
-                    .text()
-                    .trim()
-                    .let(episodeNumberRegex::find)
-                    ?.groupValues
-                    ?.last() ?: "0"
-            val href = element.selectFirst("a[href]")!!
-            val episodeName = href.ownText()
-            episode_number = epNum.toFloatOrNull() ?: 0F
-            date_upload =
-                element
-                    .selectFirst(episodeDateSelector)
-                    ?.text()
-                    ?.toDate() ?: 0L
-            name = "$episodeSeasonPrefix $seasonName x $epNum - $episodeName"
-            setUrlWithoutDomain(href.attr("href"))
+    ): SEpisode = SEpisode.create().apply {
+        val epNum =
+            element
+                .selectFirst("div.numerando")!!
+                .text()
+                .trim()
+                .let(episodeNumberRegex::find)
+                ?.groupValues
+                ?.last() ?: "0"
+        val href = element.selectFirst("a[href]")!!
+        val episodeName = href.ownText()
+        episode_number = epNum.toFloatOrNull() ?: 0F
+        date_upload =
+            element
+                .selectFirst(episodeDateSelector)
+                ?.text()
+                ?.toDate() ?: 0L
+        name = "$episodeSeasonPrefix $seasonName x $epNum - $episodeName"
+        setUrlWithoutDomain(href.attr("href"))
 
-            // Extract episode image
-            element.selectFirst("img")?.let { img ->
-                preview_url = img.getImageUrl()
-            }
+        // Extract episode image
+        element.selectFirst("img")?.let { img ->
+            preview_url = img.getImageUrl()
         }
+    }
 
     override fun episodeListParse(response: Response): List<SEpisode> {
         val doc = getRealAnimeDoc(response.asJsoup())
@@ -425,19 +402,6 @@ class AnimeOnlineNinja :
             prefLang.isBlank() -> "div"
             else -> "div.OD_$prefLang"
         }
-        return document.select("div.ODDIV $langSelector > li").flatMap {
-            val hosterUrl = it.attr("onclick").toString()
-                .substringAfter("('")
-                .substringBefore("')")
-            val lang = when (langSelector) {
-                "div" -> {
-                    it.parent()?.attr("class").toString()
-                        .substringAfter("OD_", "")
-                        .substringBefore(" ")
-                }
-
-                else -> prefLang
-            }
         return document.select("div.ODDIV $langSelector > li").flatMap {
             val hosterUrl =
                 it

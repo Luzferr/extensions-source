@@ -7,6 +7,7 @@ import aniyomi.lib.filemoonextractor.FilemoonExtractor
 import aniyomi.lib.streamwishextractor.StreamWishExtractor
 import aniyomi.lib.universalextractor.UniversalExtractor
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.multisrc.dooplay.DooPlay
 import eu.kanade.tachiyomi.network.GET
@@ -37,14 +38,19 @@ class Animenix :
     // ============================== Episodes ==============================
     override val episodeMovieText = "Película"
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element) = throw UnsupportedOperationException()
+
+    override fun hosterListParse(response: Response): List<Hoster> {
         val players = response.asJsoup().select("li.dooplay_player_option")
-        return players.flatMap { player ->
+        val videos = players.flatMap { player ->
             runCatching {
                 val link = getPlayerUrl(player)
                 getPlayerVideos(link)
             }.getOrElse { emptyList() }
         }
+        return listOf(Hoster(hosterName = name, videoList = videos))
     }
 
     private fun getPlayerUrl(player: Element): String {

@@ -14,6 +14,7 @@ import aniyomi.lib.voeextractor.VoeExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -203,7 +204,7 @@ open class MhdFlix :
         return linkRegex.findAll(text).map { it.value.trim().removeSurrounding("\"") }.toList()
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
 
         val title = document.title()
@@ -213,7 +214,7 @@ open class MhdFlix :
         val season = seasonEpisodeMatch?.groups?.get(1)?.value?.toIntOrNull()
         val episode = seasonEpisodeMatch?.groups?.get(2)?.value?.toIntOrNull()
 
-        return document.select(".video-player iframe").flatMapCatching { iframe ->
+        val videos = document.select(".video-player iframe").flatMapCatching { iframe ->
             val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
             val idRegex = Regex("""/e/(\d+)""")
             val matchResult = idRegex.find(src)
@@ -240,6 +241,7 @@ open class MhdFlix :
                 serverVideoResolver(videoLink, type)
             }
         }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     private val vidHideExtractor by lazy { VidHideExtractor(client, headers) }

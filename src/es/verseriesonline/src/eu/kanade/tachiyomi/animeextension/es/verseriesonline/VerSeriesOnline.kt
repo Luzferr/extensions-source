@@ -136,7 +136,7 @@ class VerSeriesOnline :
 
     override fun episodeFromElement(element: Element): SEpisode = throw UnsupportedOperationException()
 
-    private fun seasonListSelector(): String = "div.floats a"
+    private fun seasonLinksSelector(): String = "div.floats a"
 
     private fun seasonEpisodesSelector(): String = "#dle-content > article > div > div:nth-child(3) > div > div > a"
 
@@ -144,7 +144,7 @@ class VerSeriesOnline :
         val document = response.asJsoup()
         val episodeList = mutableListOf<SEpisode>()
 
-        document.select(seasonListSelector()).forEach { seasonElement ->
+        document.select(seasonLinksSelector()).forEach { seasonElement ->
             val seasonUrl = seasonElement.attr("href")
             val seasonNumber = Regex("temporada-(\\d+)").find(seasonUrl)?.groups?.get(1)?.value?.toIntOrNull() ?: 1
             val seasonDocument = client.newCall(GET(seasonUrl)).execute().useAsJsoup()

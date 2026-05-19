@@ -4,6 +4,7 @@ import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -101,9 +102,9 @@ class Pelisplusph : PelisPlus() {
         }
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
-        return document.select(".TbVideoNv").flatMap { serverItem ->
+        val videos = document.select(".TbVideoNv").flatMap { serverItem ->
             serverItem.select(".TbVideoNv li")
                 .catchingFlatMapBlocking { videoItem ->
                     val langItem = videoItem.attr("data-name")
@@ -120,6 +121,7 @@ class Pelisplusph : PelisPlus() {
                     serverVideoResolver(url, lang, name)
                 }
         }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     override fun List<Video>.sortVideos(): List<Video> {

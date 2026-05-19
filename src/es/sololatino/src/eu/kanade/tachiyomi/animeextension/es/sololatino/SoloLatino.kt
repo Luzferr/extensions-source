@@ -13,6 +13,7 @@ import aniyomi.lib.vidguardextractor.VidGuardExtractor
 import aniyomi.lib.vidhideextractor.VidHideExtractor
 import aniyomi.lib.voeextractor.VoeExtractor
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -105,7 +106,11 @@ class SoloLatino :
         setUrlWithoutDomain(href)
     }
 
-    override fun videoListSelector() = "li.dooplay_player_option"
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element) = throw UnsupportedOperationException()
+
+    private fun videoListSelector() = "li.dooplay_player_option"
 
     override val episodeMovieText = "Película"
 
@@ -113,7 +118,7 @@ class SoloLatino :
     override val prefQualityTitle = "Calidad preferida"
 
     // ============================ Video Links =============================
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val path = response.request.url.toString()
         val links = mutableListOf<Pair<String, String>>()
 
@@ -127,9 +132,10 @@ class SoloLatino :
             return emptyList()
         }
 
-        return links.filter { it.first.isNotBlank() }.parallelCatchingFlatMapBlocking { (link, languageCode) ->
+        val videos = links.filter { it.first.isNotBlank() }.parallelCatchingFlatMapBlocking { (link, languageCode) ->
             extractVideos(link, languageCode)
         }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     private suspend fun getLinks(after: (List<Pair<String, String>>) -> Unit, onError: (Throwable) -> Unit, path: String) {

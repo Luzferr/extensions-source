@@ -6,6 +6,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
@@ -13,7 +14,6 @@ import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
-import eu.kanade.tachiyomi.network.awaitSuccess
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -389,20 +389,27 @@ class VVVVID :
         return episodeList.reversed()
     }
 
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
     // ============================ Video Links =============================
 
-    override fun videoListRequest(episode: SEpisode): Request = throw UnsupportedOperationException()
+    override fun hosterListRequest(episode: SEpisode): Request = videoListRequestPair(episode).first
 
-    override fun videoListParse(response: Response): List<Video> = throw UnsupportedOperationException()
-
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
-        val (request, videoId) = videoListRequestPair(episode)
-        return client.newCall(request)
-            .awaitSuccess()
-            .let { response ->
-                videoListParse(response, videoId).sort()
-            }
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videoId = response.request.url.queryParameter("video_id")?.toIntOrNull() ?: return emptyList()
+        return listOf(
+            Hoster(
+                hosterName = name,
+                videoList = parseVideoList(response, videoId).sortVideos(),
+            ),
+        )
     }
+
+    override fun videoListRequest(hoster: Hoster): Request = throw UnsupportedOperationException("Not used")
+
+    override fun videoListParse(response: Response, hoster: Hoster): List<Video> = throw UnsupportedOperationException("Not used")
+
+    override suspend fun getVideoList(hoster: Hoster): List<Video> = hoster.videoList.orEmpty()
 
     private fun videoListRequestPair(episode: SEpisode): Pair<Request, Int> {
         if (connId.isEmpty()) {
@@ -428,7 +435,7 @@ class VVVVID :
         )
     }
 
-    private fun videoListParse(response: Response, videoId: Int): List<Video> {
+    private fun parseVideoList(response: Response, videoId: Int): List<Video> {
         val videoJson = json.decodeFromString<VideosResponse>(response.body.string())
         val videoList = mutableListOf<Video>()
 
@@ -532,9 +539,9 @@ class VVVVID :
         audioTracks.add(Track("$baseVideoUrl/$audioUrl", "Audio"))
 
         return Video(
-            baseVideoUrl,
-            name,
-            "$baseVideoUrl/$videoUrl",
+            videoUrl = "$baseVideoUrl/$videoUrl",
+            videoTitle = name,
+            headers = dashHeaders,
             audioTracks = audioTracks,
         )
     }
@@ -548,11 +555,11 @@ class VVVVID :
 
     private fun LinkData.toJsonString(): String = json.encodeToString(this)
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
 
         return this.sortedWith(
-            compareBy { it.quality.contains(quality) },
+            compareBy { it.videoTitle.contains(quality, true) },
         ).reversed()
     }
 

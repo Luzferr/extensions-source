@@ -4,6 +4,7 @@ import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -87,23 +88,19 @@ class AnimeSaturn :
         return episode
     }
 
-    override fun videoListParse(response: Response): List<Video> {
-        val document = response.asJsoup()
-        val standardVideos = videosFromElement(document)
-        val videoList = mutableListOf<Video>()
-        videoList.addAll(standardVideos)
-        return videoList
-    }
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
 
-    override fun videoListRequest(episode: SEpisode): Request {
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
+
+    override fun hosterListRequest(episode: SEpisode): Request {
         val episodePage = client.newCall(GET(baseUrl + episode.url)).execute().asJsoup()
         val watchUrl = episodePage.select("a[href*=/watch]").attr("href")
         return GET("$watchUrl&s=alt")
     }
 
-    override fun videoListSelector() = throw UnsupportedOperationException()
-
-    override fun videoFromElement(element: Element) = throw UnsupportedOperationException()
+    override fun hosterListParse(response: Response): List<Hoster> = listOf(
+        Hoster(hosterName = name, videoList = videosFromElement(response.asJsoup()).sortVideos()),
+    )
 
     private fun videosFromElement(document: Document): List<Video> {
         val url = if (document.html().contains("jwplayer(")) {
@@ -124,29 +121,27 @@ class AnimeSaturn :
             }.toList()
             videoLinks.mapIndexed { i, link ->
                 Video(
-                    link,
-                    qualities[i],
-                    link,
+                    videoUrl = link,
+                    videoTitle = qualities[i],
                 )
             }
         } else {
             listOf(
                 Video(
-                    url,
-                    "Qualità predefinita",
-                    url,
+                    videoUrl = url,
+                    videoTitle = "Qualità predefinita",
                     headers = Headers.headersOf("Referer", referer),
                 ),
             )
         }
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString("preferred_quality", "1080")!!
         val qualityList = mutableListOf<Video>()
         var preferred = 0
         for (video in this) {
-            if (video.quality.contains(quality)) {
+            if (video.videoTitle.contains(quality, true)) {
                 qualityList.add(preferred, video)
                 preferred++
             } else {
@@ -155,8 +150,6 @@ class AnimeSaturn :
         }
         return qualityList
     }
-
-    override fun videoUrlParse(document: Document) = throw UnsupportedOperationException()
 
     override fun searchAnimeFromElement(element: Element): SAnime {
         val anime = SAnime.create()

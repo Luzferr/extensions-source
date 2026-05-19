@@ -16,6 +16,7 @@ import aniyomi.lib.voeextractor.VoeExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -157,7 +158,7 @@ class MonosChinos :
         }
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
         val i = document.select(".opt").attr("data-encrypt")
         val referer = document.location()
@@ -178,13 +179,14 @@ class MonosChinos :
 
         val serverDocument = client.newCall(request).execute().useAsJsoup()
 
-        return serverDocument.select("[data-player]")
+        val videos = serverDocument.select("[data-player]")
             .mapNotNull {
                 runCatching {
                     String(Base64.decode(it.attr("data-player"), Base64.DEFAULT))
                 }.getOrNull()
             }
             .catchingFlatMapBlocking { serverVideoResolver(it) }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     override fun getFilterList(): AnimeFilterList = MonosChinosFilters.FILTER_LIST

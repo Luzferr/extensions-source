@@ -2,9 +2,9 @@ package eu.kanade.tachiyomi.animeextension.es.pelisplushd
 
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
-import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.multisrc.pelisplus.Filters
 import eu.kanade.tachiyomi.multisrc.pelisplus.PelisPlus
 import eu.kanade.tachiyomi.network.GET
@@ -74,11 +74,11 @@ class Pelisplushd : PelisPlus() {
         return episodes.reversed()
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
         val data = document.selectFirst("script:containsData(video[1] = )")?.data() ?: return emptyList()
 
-        return REGEX_VIDEO_OPTS.findAll(data).map { it.groupValues[1] }
+        val videos = REGEX_VIDEO_OPTS.findAll(data).map { it.groupValues[1] }
             .filter { it.contains("embed69.org") }.toList()
             .flatMapCatching { opt ->
                 val docResponse = client.newCall(GET(opt)).execute().useAsJsoup()
@@ -118,6 +118,7 @@ class Pelisplushd : PelisPlus() {
                         }
                 }
             }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {

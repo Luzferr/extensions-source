@@ -6,6 +6,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
@@ -105,7 +106,7 @@ open class VeoHentai :
         )
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
         val frame = document.selectFirst("iframe[webkitallowfullscreen]")
         val src = frame?.attr("abs:src")?.takeIf { !it.startsWith("about") }
@@ -127,15 +128,16 @@ open class VeoHentai :
                 it.substringAfter("label\": \"").substringAfter("label: \"").substringBefore("\"")
         }.filter { (file, _) -> file.isNotEmpty() }.map { (file, label) -> Track(file, label) }
 
-        return scriptPlayer.substringAfter("sources:").substringBefore("]").getItems().map {
+        val videos = scriptPlayer.substringAfter("sources:").substringBefore("]").getItems().map {
             val file = it.substringAfter("file\": \"").substringAfter("file: \"").substringBefore("\"")
             val type = when {
                 file.contains(".m3u") -> "HSL"
                 file.contains(".mp4") -> "MP4"
                 else -> ""
             }
-            Video(file, "VeoHentai:$type", file, subtitleTracks = subs)
+            Video(videoUrl = file, videoTitle = "VeoHentai:$type", subtitleTracks = subs)
         }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     override fun List<Video>.sortVideos(): List<Video> {

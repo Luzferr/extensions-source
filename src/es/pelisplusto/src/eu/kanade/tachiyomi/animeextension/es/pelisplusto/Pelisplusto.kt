@@ -3,9 +3,9 @@ package eu.kanade.tachiyomi.animeextension.es.pelisplusto
 import android.util.Base64
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
-import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.multisrc.pelisplus.Filters
 import eu.kanade.tachiyomi.multisrc.pelisplus.PelisPlus
 import eu.kanade.tachiyomi.network.GET
@@ -97,9 +97,9 @@ class Pelisplusto : PelisPlus() {
         }
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.useAsJsoup()
-        return document.select(".bg-tabs ul li")
+        val videos = document.select(".bg-tabs ul li")
             .catchingFlatMapBlocking {
                 val prefix = it.parent()?.parent()?.selectFirst("button")?.ownText()?.lowercase()?.getLang()
                 val decode = String(Base64.decode(it.attr("data-server"), Base64.DEFAULT))
@@ -121,6 +121,7 @@ class Pelisplusto : PelisPlus() {
 
                 serverVideoResolver(videoUrl, prefix ?: "")
             }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     override fun getFilterList(): AnimeFilterList = AnimeFilterList(

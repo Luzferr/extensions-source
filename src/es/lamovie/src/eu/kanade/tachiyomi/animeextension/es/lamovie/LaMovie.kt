@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
-import aniyomi.lib.doodextractor.DoodExtractor
 import aniyomi.lib.filemoonextractor.FilemoonExtractor
 import aniyomi.lib.goodstramextractor.GoodStreamExtractor
 import aniyomi.lib.mp4uploadextractor.Mp4uploadExtractor
@@ -15,6 +14,7 @@ import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animeextension.es.lamovie.extractors.LaMovieEmbedExtractor
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -36,6 +36,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import okhttp3.Response
+import org.jsoup.nodes.Element
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.text.SimpleDateFormat
@@ -46,15 +47,12 @@ class LaMovie :
     DopeFlix(
         "LaMovie",
         "es",
-        arrayOf(
-            "la.movie",
-        ),
-        "la.movie",
+        "",
+        listOf("la.movie"),
     ) {
     override val id: Long = 5419283741928374105
 
     private val json by lazy { Json { ignoreUnknownKeys = true } }
-    private val doodExtractor by lazy { DoodExtractor(client) }
     private val voeExtractor by lazy { VoeExtractor(client, headers) }
     private val mp4uploadExtractor by lazy { Mp4uploadExtractor(client) }
     private val vidHideExtractor by lazy { VidHideExtractor(client, headers) }
@@ -64,7 +62,7 @@ class LaMovie :
     private val goodStreamExtractor by lazy { GoodStreamExtractor(client, headers) }
     private val lamovieEmbedExtractor by lazy { LaMovieEmbedExtractor(client, headers) }
 
-    private val preferences: SharedPreferences by lazy {
+    protected override val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
@@ -90,7 +88,13 @@ class LaMovie :
         return GET(url, headers)
     }
 
-    override fun latestUpdatesParse(response: Response): AnimesPage = response.parseListing()
+    override suspend fun getLatestUpdates(page: Int): AnimesPage = client.newCall(latestUpdatesRequest(page))
+        .execute()
+        .use { it.parseListing() }
+
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
 
     // =============================== Search ===============================
     override fun getFilterList(): AnimeFilterList = LaMovieFilters.createFilterList()
@@ -187,7 +191,7 @@ class LaMovie :
     }
 
     // ============================ Video Links =============================
-    override fun videoListRequest(episode: SEpisode): Request {
+    private fun playerRequest(episode: SEpisode): Request {
         val episodeUrl = parseEpisodeUrl(episode.url)
         val builder = apiUrlBuilder("player")
             .addQueryParameter("postId", episodeUrl.postId.toString())
@@ -196,7 +200,13 @@ class LaMovie :
         return GET(builder.build(), headers)
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> = client.newCall(playerRequest(episode))
+        .execute()
+        .use { response ->
+            listOf(Hoster(hosterName = name, videoList = parsePlayerVideos(response).sortVideos()))
+        }
+
+    private fun parsePlayerVideos(response: Response): List<Video> {
         val data = response.parseData(PlayerDataDto.serializer())
 
         val embeds = data.parseEmbeds()
@@ -225,7 +235,7 @@ class LaMovie :
         }
 
         when (embed.serverKey()) {
-            SERVER_KEY_DOOD -> doodExtractor.videosFromUrl(embed.url, "$prefix - Doodstream")
+            SERVER_KEY_DOOD -> emptyList()
             SERVER_KEY_VOE -> voeExtractor.videosFromUrl(embed.url, "$prefix - Voe")
             SERVER_KEY_MP4UPLOAD -> mp4uploadExtractor.videosFromUrl(embed.url, headers, "$prefix - Mp4upload")
             SERVER_KEY_STREAMHIDE -> kotlinx.coroutines.runBlocking { vidHideExtractor.videosFromUrl(embed.url) { quality -> "StreamHide - $quality - $prefix" } }
@@ -253,7 +263,7 @@ class LaMovie :
         )
 
         fun Video.matchesPreferredQuality(): Boolean {
-            val normalized = quality.lowercase(Locale.US)
+            val normalized = videoTitle.lowercase(Locale.US)
             if (normalized.contains(preferredQualityLower)) return true
 
             val numericQuality = QUALITY_REGEX.find(normalized)?.groupValues?.get(1)?.toIntOrNull()
@@ -264,7 +274,7 @@ class LaMovie :
         }
 
         fun Video.extractQualityValue(): Int {
-            val normalized = quality.lowercase(Locale.US)
+            val normalized = videoTitle.lowercase(Locale.US)
             val numericQuality = QUALITY_REGEX.find(normalized)?.groupValues?.get(1)?.toIntOrNull()
             if (numericQuality != null) return numericQuality
 
@@ -317,14 +327,14 @@ class LaMovie :
         return serverKey() == preferredKey
     }
 
-    private fun Video.serverKey(): String = detectServer(quality, url)
+    private fun Video.serverKey(): String = detectServer(videoTitle, videoUrl)
 
     private fun Video.matchesLanguage(preferredKey: String): Boolean {
         if (preferredKey == PREF_LANGUAGE_DEFAULT) return false
         return languageCode() == preferredKey
     }
 
-    private fun Video.languageCode(): String = detectLanguage(quality, url)
+    private fun Video.languageCode(): String = detectLanguage(videoTitle, videoUrl)
 
     private fun detectServer(vararg texts: String?): String {
         if (texts.isEmpty()) return SERVER_KEY_UNKNOWN

@@ -13,6 +13,7 @@ import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -167,7 +168,7 @@ class MetroSeries :
         emptyList()
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
         val videoList = mutableListOf<Video>()
         document.select(".aa-tbs-video a").forEach {
@@ -218,7 +219,7 @@ class MetroSeries :
                 }
             } catch (_: Exception) {}
         }
-        return videoList
+        return listOf(Hoster(hosterName = name, videoList = videoList.sortVideos()))
     }
 
     override fun List<Video>.sortVideos(): List<Video> {

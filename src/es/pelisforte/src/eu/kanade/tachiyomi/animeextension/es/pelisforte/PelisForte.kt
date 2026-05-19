@@ -10,6 +10,7 @@ import aniyomi.lib.mp4uploadextractor.Mp4uploadExtractor
 import aniyomi.lib.okruextractor.OkruExtractor
 import aniyomi.lib.streamlareextractor.StreamlareExtractor
 import aniyomi.lib.streamtapeextractor.StreamTapeExtractor
+import aniyomi.lib.streamwishextractor.StreamWishExtractor
 import aniyomi.lib.upstreamextractor.UpstreamExtractor
 import aniyomi.lib.uqloadextractor.UqloadExtractor
 import aniyomi.lib.vidguardextractor.VidGuardExtractor
@@ -19,6 +20,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -146,9 +148,9 @@ open class PelisForte :
         return linkRegex.findAll(text).map { it.value.trim().removeSurrounding("\"") }.toList()
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
-        return document.select(".video-player iframe").parallelCatchingFlatMapBlocking { iframe ->
+        val videos = document.select(".video-player iframe").parallelCatchingFlatMapBlocking { iframe ->
             val id = iframe.parent()?.attr("id")
             val idTab = document.selectFirst("[href=\"#$id\"]")?.closest(".lrt")?.attr("id")
             val lang = document.select("[tab=$idTab]").text()
@@ -169,6 +171,7 @@ open class PelisForte :
 
             fetchUrls(locationsDdh).parallelCatchingFlatMap { serverVideoResolver(it, prefix) }
         }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     /*--------------------------------Video extractors------------------------------------*/
@@ -184,6 +187,7 @@ open class PelisForte :
     private val fastreamExtractor by lazy { FastreamExtractor(client, headers) }
     private val upstreamExtractor by lazy { UpstreamExtractor(client) }
     private val streamTapeExtractor by lazy { StreamTapeExtractor(client) }
+    private val streamWishExtractor by lazy { StreamWishExtractor(client, headers) }
     private val vidGuardExtractor by lazy { VidGuardExtractor(client) }
 
     private suspend fun serverVideoResolver(url: String, prefix: String = ""): List<Video> = when {

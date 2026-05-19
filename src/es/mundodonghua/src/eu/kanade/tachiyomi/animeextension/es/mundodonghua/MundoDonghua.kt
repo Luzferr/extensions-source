@@ -172,7 +172,7 @@ class MundoDonghua :
                 }
             }
         }
-        return videoList.sort()
+        return videoList.sortVideos()
     }
 
     override fun List<Video>.sortVideos(): List<Video> {

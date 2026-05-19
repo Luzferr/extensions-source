@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -162,8 +163,17 @@ class Toonitalia :
 
     override fun episodeListSelector() = "article > div.entry-content table tr:has(a)"
 
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element): SAnime = throw UnsupportedOperationException()
+
     // ============================ Video Links =============================
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
+        val videos = extractVideoList(response).sortVideos()
+        return listOf(Hoster(hosterName = name, videoList = videos))
+    }
+
+    private fun extractVideoList(response: Response): List<Video> {
         val document = response.asJsoup()
         val episodeNumber = response.request.url.fragment!!.toInt()
 
@@ -202,12 +212,6 @@ class Toonitalia :
         else -> null
     } ?: emptyList()
 
-    override fun videoFromElement(element: Element): Video = throw UnsupportedOperationException()
-
-    override fun videoListSelector(): String = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document): String = throw UnsupportedOperationException()
-
     // ============================== Filters ===============================
     override fun getFilterList() = AnimeFilterList(
         AnimeFilter.Header("NOTA: ignorato se si utilizza la ricerca di testo!"),
@@ -227,14 +231,14 @@ class Toonitalia :
         fun toUriPart() = vals[state].second
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
 
         return sortedWith(
             compareBy(
-                { it.quality.contains(server) },
-                { it.quality.contains(quality) },
+                { it.videoTitle.contains(server, true) },
+                { it.videoTitle.contains(quality, true) },
             ),
         ).reversed()
     }

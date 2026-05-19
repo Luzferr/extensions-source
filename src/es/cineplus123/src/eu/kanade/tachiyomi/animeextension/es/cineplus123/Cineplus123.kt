@@ -6,6 +6,7 @@ import aniyomi.lib.streamwishextractor.StreamWishExtractor
 import aniyomi.lib.universalextractor.UniversalExtractor
 import aniyomi.lib.uqloadextractor.UqloadExtractor
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.multisrc.dooplay.DooPlay
 import eu.kanade.tachiyomi.network.GET
@@ -34,9 +35,11 @@ class Cineplus123 :
 
     override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/ano/2024/page/$page", headers)
 
-    override fun videoListSelector() = "li.dooplay_player_option" // ul#playeroptionsul
-
     override val episodeMovieText = "Película"
+
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element) = throw UnsupportedOperationException()
 
     override val episodeSeasonPrefix = "Temporada"
     override val prefQualityTitle = "Calidad preferida"
@@ -46,15 +49,16 @@ class Cineplus123 :
     private val universalExtractor by lazy { UniversalExtractor(client) }
 
     // ============================ Video Links =============================
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
         val players = document.select("ul#playeroptionsul li")
-        return players.catchingFlatMapBlocking { player ->
+        val videos = players.catchingFlatMapBlocking { player ->
             val name = player.selectFirst("span.title")!!.text()
             val url = getPlayerUrl(player)
                 ?: return@catchingFlatMapBlocking emptyList()
             extractVideos(url, name)
         }
+        return listOf(Hoster(hosterName = name, videoList = videos))
     }
 
     private suspend fun extractVideos(url: String, lang: String): List<Video> = when {

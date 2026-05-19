@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -126,11 +127,12 @@ class Lacartoons :
         return episodes.reversed()
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.asJsoup()
-        return document.select("iframe").parallelCatchingFlatMapBlocking {
+        val videos = document.select("iframe").parallelCatchingFlatMapBlocking {
             serverVideoResolver(it.attr("src"))
         }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     private fun serverVideoResolver(url: String): List<Video> {

@@ -10,6 +10,7 @@ import aniyomi.lib.uqloadextractor.UqloadExtractor
 import aniyomi.lib.vidhideextractor.VidHideExtractor
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.multisrc.dooplay.DooPlay
@@ -49,9 +50,13 @@ class VerPelisTop :
 
     override fun latestUpdatesNextPageSelector() = "#nextpagination"
 
-    override fun videoListSelector() = "li.dooplay_player_option" // ul#playeroptionsul
+    private fun videoListSelector() = "li.dooplay_player_option" // ul#playeroptionsul
 
     override val episodeMovieText = "Película"
+
+    override fun seasonListSelector(): String = throw UnsupportedOperationException()
+
+    override fun seasonFromElement(element: Element) = throw UnsupportedOperationException()
 
     override val episodeSeasonPrefix = "Temporada"
 
@@ -80,12 +85,13 @@ class VerPelisTop :
     }
 
     // ============================ Video Links =============================
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val document = response.useAsJsoup()
         val players = document.select("ul#playeroptionsul li")
-        return players.catchingFlatMapBlocking { player ->
+        val videos = players.catchingFlatMapBlocking { player ->
             serverVideoResolver(player)
         }
+        return listOf(Hoster(hosterName = name, videoList = videos.sortVideos()))
     }
 
     private val uqloadExtractor by lazy { UqloadExtractor(client) }

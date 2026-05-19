@@ -17,6 +17,7 @@ import eu.kanade.tachiyomi.animeextension.all.torrentioanime.dto.StreamDataTorre
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -354,9 +355,11 @@ class Torrentio :
         }
     }
 
+    override fun seasonListParse(response: Response): List<SAnime> = emptyList()
+
     // ============================ Video Links =============================
 
-    override fun videoListRequest(episode: SEpisode): Request {
+    override fun hosterListRequest(episode: SEpisode): Request {
         val mainURL = buildString {
             append("$baseUrl/")
 
@@ -397,7 +400,17 @@ class Torrentio :
         return GET(mainURL)
     }
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> = listOf(
+        Hoster(hosterName = name, videoList = parseVideoList(response).sortVideos()),
+    )
+
+    override fun videoListRequest(hoster: Hoster): Request = throw UnsupportedOperationException("Not used")
+
+    override fun videoListParse(response: Response, hoster: Hoster): List<Video> = throw UnsupportedOperationException("Not used")
+
+    override suspend fun getVideoList(hoster: Hoster): List<Video> = hoster.videoList.orEmpty()
+
+    private fun parseVideoList(response: Response): List<Video> {
         val responseString = response.body.string()
         val streamList = json.decodeFromString<StreamDataTorrent>(responseString)
         val debridProvider = preferences.getString(PREF_DEBRID_KEY, "none")
@@ -438,14 +451,17 @@ class Torrentio :
                 } else {
                     stream.url ?: ""
                 }
-            Video(urlOrHash, ((stream.name?.replace("Torrentio\n", "") ?: "") + "\n" + stream.title), urlOrHash)
+            Video(
+                videoUrl = urlOrHash,
+                videoTitle = ((stream.name?.replace("Torrentio\n", "") ?: "") + "\n" + stream.title),
+            )
         }.orEmpty()
     }
 
     private val codecPreferences
         get() = preferences.getStringSet(PREF_CODEC_KEY, PREF_CODEC_DEFAULT) ?: setOf()
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val isDub = preferences.getBoolean(IS_DUB_KEY, IS_DUB_DEFAULT)
         val isEfficient = preferences.getBoolean(IS_EFFICIENT_KEY, IS_EFFICIENT_DEFAULT)
 
@@ -455,39 +471,28 @@ class Torrentio :
                 video.detectCodec() in codecPreferences
             }.sortedWith(
                 compareBy(
-                    { Regex("\\[(.+?) download]").containsMatchIn(it.quality) },
-                    { isDub && !it.quality.contains("dubbed", true) },
+                    { Regex("\\[(.+?) download]").containsMatchIn(it.videoTitle) },
+                    { isDub && !it.videoTitle.contains("dubbed", true) },
                 ),
             )
         } else {
             // If no codec preferences, use old sorting logic
             sortedWith(
                 compareBy(
-                    { Regex("\\[(.+?) download]").containsMatchIn(it.quality) },
-                    { isDub && !it.quality.contains("dubbed", true) },
-                    { isEfficient && !arrayOf("hevc", "265", "av1").any { q -> it.quality.contains(q, true) } },
+                    { Regex("\\[(.+?) download]").containsMatchIn(it.videoTitle) },
+                    { isDub && !it.videoTitle.contains("dubbed", true) },
+                    { isEfficient && !arrayOf("hevc", "265", "av1").any { q -> it.videoTitle.contains(q, true) } },
                 ),
             )
         }
     }
 
     private fun Video.detectCodec(): String = when {
-        quality.contains("264", true) -> "x264"
-        quality.contains("265", true) || quality.contains("hevc", true) -> "x265"
-        quality.contains("av1", true) -> "av1"
-        quality.contains("vp9", true) -> "vp9"
+        videoTitle.contains("264", true) -> "x264"
+        videoTitle.contains("265", true) || videoTitle.contains("hevc", true) -> "x265"
+        videoTitle.contains("av1", true) -> "av1"
+        videoTitle.contains("vp9", true) -> "vp9"
         else -> "other"
-    }
-
-    private fun fetchTrackers(): String {
-        val request = Request.Builder()
-            .url("https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt")
-            .build()
-
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw Exception("Unexpected code $response")
-            return response.body.string().trim()
-        }
     }
 
     private fun fetchTrackers(): String {
@@ -908,10 +913,6 @@ class Torrentio :
             "other",
         )
         private val PREF_CODEC_DEFAULT = setOf<String>() // Empty by default to show all
-
-        private val DATE_FORMATTER by lazy {
-            SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH)
-        }
 
         private val DATE_FORMATTER by lazy {
             SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH)
