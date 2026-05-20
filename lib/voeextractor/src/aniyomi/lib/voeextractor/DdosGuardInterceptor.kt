@@ -34,7 +34,8 @@ class DdosGuardInterceptor(private val client: OkHttpClient) : Interceptor {
             return chain.proceed(originalRequest)
         }
 
-        val newCookie = getNewCookie(originalRequest.url) ?: return chain.proceed(originalRequest)
+        val newCookie = runCatching { getNewCookie(originalRequest.url) }.getOrNull()
+            ?: return chain.proceed(originalRequest)
         val newCookieHeader = buildString {
             (oldCookie + newCookie).forEachIndexed { index, cookie ->
                 if (index > 0) append("; ")

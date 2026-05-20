@@ -25,32 +25,37 @@ class VoeExtractor(private val client: OkHttpClient, private val headers: Header
 
     fun videosFromUrl(url: String, prefix: String = ""): List<Video> {
         val videoList = mutableListOf<Video>()
-        var document = clientDdos.newCall(GET(url, headers)).execute().asJsoup()
-        val scriptData = document.selectFirst("script")?.data()
-        val redirectMatch = scriptData?.let { redirectRegex.find(it) }
 
-        if (redirectMatch != null) {
-            val originalUrl = redirectMatch.groupValues[1]
-            document = clientDdos.newCall(GET(originalUrl, headers)).execute().asJsoup()
-        }
+        runCatching {
+            var document = clientDdos.newCall(GET(url, headers)).execute().asJsoup()
+            val scriptData = document.selectFirst("script")?.data()
+            val redirectMatch = scriptData?.let { redirectRegex.find(it) }
 
-        val encodedString = document.selectFirst("script[type=application/json]")?.data()
-            ?.trim()?.substringAfter("[\"")?.substringBeforeLast("\"]") ?: return emptyList()
+            if (redirectMatch != null) {
+                val originalUrl = redirectMatch.groupValues[1]
+                document = clientDdos.newCall(GET(originalUrl, headers)).execute().asJsoup()
+            }
 
-        val decryptedJson = decryptF7(encodedString) ?: return emptyList()
-        val m3u8 = decryptedJson["source"]?.jsonPrimitive?.content
-        val mp4 = decryptedJson["direct_access_url"]?.jsonPrimitive?.content
+            val encodedString = document.selectFirst("script[type=application/json]")?.data()
+                ?.trim()?.substringAfter("[\"")?.substringBeforeLast("\"]") ?: return emptyList()
 
-        if (m3u8 != null) {
-            playlistUtils.extractFromHls(
-                m3u8,
-                videoNameGen = { quality -> "${prefix}Voe:$quality" },
-            ).let { videoList.addAll(it) }
-        }
-        if (mp4 != null) {
-            videoList.add(
-                Video(videoUrl = mp4, videoTitle = "${prefix}Voe:MP4"),
-            )
+            val decryptedJson = decryptF7(encodedString) ?: return emptyList()
+            val m3u8 = decryptedJson["source"]?.jsonPrimitive?.content
+            val mp4 = decryptedJson["direct_access_url"]?.jsonPrimitive?.content
+
+            if (m3u8 != null) {
+                runCatching {
+                    playlistUtils.extractFromHls(
+                        m3u8,
+                        videoNameGen = { quality -> "${prefix}Voe:$quality" },
+                    ).let { videoList.addAll(it) }
+                }
+            }
+            if (mp4 != null) {
+                videoList.add(
+                    Video(videoUrl = mp4, videoTitle = "${prefix}Voe:MP4"),
+                )
+            }
         }
 
         return videoList
