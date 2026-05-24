@@ -67,15 +67,18 @@ object AnimeStreamFilters {
 
     lateinit var filterElements: Elements
 
-    fun filterInitialized() = ::filterElements.isInitialized
+    fun filterInitialized() = ::filterElements.isInitialized && filterElements.isNotEmpty()
 
-    fun getPairListByIndex(index: Int) = filterElements.get(index)
-        .select("li")
-        .map { element ->
-            val key = element.selectFirst("label")!!.text()
-            val value = element.selectFirst("input")!!.attr("value")
-            Pair(key, value)
-        }.toTypedArray()
+    fun getPairListByIndex(index: Int): Array<Pair<String, String>> {
+        if (index < 0 || index >= filterElements.size) return emptyArray()
+        return filterElements.get(index)
+            .select("li")
+            .mapNotNull { element ->
+                val key = element.selectFirst("label")?.text() ?: return@mapNotNull null
+                val value = element.selectFirst("input")?.attr("value") ?: return@mapNotNull null
+                Pair(key, value)
+            }.toTypedArray()
+    }
 
     private val GENRES_LIST by lazy { getPairListByIndex(0) }
     private val SEASON_LIST by lazy { getPairListByIndex(1) }

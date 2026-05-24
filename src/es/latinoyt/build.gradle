@@ -1,0 +1,21 @@
+ext {
+    extName = 'LatinoYT'
+    extClass = '.LatinoYT'
+    themePkg = 'animestream'
+    baseUrl = 'https://latinoyt.com'
+    overrideVersionCode = 1
+}
+
+apply from: "$rootDir/common.gradle"
+
+dependencies {
+    implementation(project(':lib:voeextractor'))
+    implementation(project(':lib:streamwishextractor'))
+    implementation(project(':lib:filemoonextractor'))
+    implementation(project(':lib:doodextractor'))
+    implementation(project(':lib:streamtapeextractor'))
+    implementation(project(':lib:goodstreamextractor'))
+    implementation(project(':lib:playlistutils'))
+    implementation(project(':lib:universalextractor'))
+    implementation(project(':lib:okruextractor'))
+}

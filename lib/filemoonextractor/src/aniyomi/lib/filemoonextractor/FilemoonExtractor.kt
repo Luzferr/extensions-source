@@ -26,22 +26,45 @@ class FilemoonExtractor(
 
     fun videosFromUrl(url: String, prefix: String = "Filemoon - ", headers: Headers? = null): List<Video> {
         var httpUrl = url.toHttpUrl()
+
+        // FIX 4: añadir User-Agent real para evitar bloqueos de Cloudflare
         val videoHeaders = (headers?.newBuilder() ?: Headers.Builder())
             .set("Referer", url)
             .set("Origin", "https://${httpUrl.host}")
+            .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
             .build()
 
         val doc = client.newCall(GET(url, videoHeaders)).execute().asJsoup()
+
         val jsEval = doc.selectFirst("script:containsData(eval):containsData(m3u8)")?.data() ?: run {
-            val iframeUrl = doc.selectFirst("iframe[src]")!!.attr("src")
+            // FIX 1: reemplazar !! por ?: return emptyList() para evitar NPE
+            val iframeUrl = doc.selectFirst("iframe[src]")?.attr("src")
+                ?: return emptyList()
+
+            // FIX 5: reconstruir headers con el host del iframe, no del original
             httpUrl = iframeUrl.toHttpUrl()
-            val iframeDoc = client.newCall(GET(iframeUrl, videoHeaders)).execute().asJsoup()
-            iframeDoc.selectFirst("script:containsData(eval):containsData(m3u8)")!!.data()
+            val iframeHeaders = Headers.Builder()
+                .set("Referer", iframeUrl)
+                .set("Origin", "https://${httpUrl.host}")
+                .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+                .build()
+
+            val iframeDoc = client.newCall(GET(iframeUrl, iframeHeaders)).execute().asJsoup()
+
+            // FIX 2: reemplazar !! por ?: return emptyList() para evitar NPE
+            iframeDoc.selectFirst("script:containsData(eval):containsData(m3u8)")?.data()
+                ?: return emptyList()
         }
+
         val unpacked = JsUnpacker.unpackAndCombine(jsEval).orEmpty()
+
+        // FIX 3 + MEJORA: usar regex en lugar de substringAfter/substringBefore
+        // Cubre formatos: {file:"url"}, {file:"url",type:"hls"}, sources:[{file:"url"}]
         val masterUrl = unpacked.takeIf(String::isNotBlank)
-            ?.substringAfter("{file:\"", "")
-            ?.substringBefore("\"}", "")
+            ?.let {
+                Regex("""(?:file|src)\s*:\s*["']([^"']+\.m3u8[^"']*)["']""")
+                    .find(it)?.groupValues?.get(1)
+            }
             ?.takeIf(String::isNotBlank)
             ?: return emptyList()
 
@@ -52,7 +75,6 @@ class FilemoonExtractor(
                     .takeIf(String::isNotBlank)
             if (subUrl != null) {
                 runCatching {
-                    // to prevent failures on serialization errors
                     client.newCall(GET(subUrl, videoHeaders)).execute()
                         .body.string()
                         .let { json.decodeFromString<List<SubtitleDto>>(it) }
@@ -74,7 +96,10 @@ class FilemoonExtractor(
                 videoUrl = it.videoUrl,
                 videoTitle = it.videoTitle,
                 audioTracks = it.audioTracks,
-                subtitleTracks = it.subtitleTracks.filter { tracks -> tracks.lang.contains(subPref, true) },
+                // si subPref está vacío, contains("") siempre es true → se incluyen todos
+                subtitleTracks = it.subtitleTracks.filter { track ->
+                    track.lang.contains(subPref, ignoreCase = true)
+                },
             )
         }
     }
