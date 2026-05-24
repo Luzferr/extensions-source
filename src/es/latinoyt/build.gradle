@@ -18,4 +18,5 @@ dependencies {
     implementation(project(':lib:playlistutils'))
     implementation(project(':lib:universalextractor'))
     implementation(project(':lib:okruextractor'))
+    implementation(project(':lib:youruploadextractor'))
 }

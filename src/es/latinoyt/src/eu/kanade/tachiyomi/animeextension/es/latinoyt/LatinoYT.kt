@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.animeextension.es.latinoyt
 
-import android.util.Log
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import aniyomi.lib.doodextractor.DoodExtractor
@@ -11,6 +10,7 @@ import aniyomi.lib.streamtapeextractor.StreamTapeExtractor
 import aniyomi.lib.streamwishextractor.StreamWishExtractor
 import aniyomi.lib.universalextractor.UniversalExtractor
 import aniyomi.lib.voeextractor.VoeExtractor
+import aniyomi.lib.youruploadextractor.YourUploadExtractor
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -58,6 +58,7 @@ class LatinoYT :
     private val streamtapeExtractor by lazy { StreamTapeExtractor(client) }
     private val goodStreamExtractor by lazy { GoodStreamExtractor(client, headers) }
     private val okruExtractor by lazy { OkruExtractor(client) }
+    private val yourUploadExtractor by lazy { YourUploadExtractor(client) }
     private val universalExtractor by lazy { UniversalExtractor(client) }
 
     // ============================== Popular ===============================
@@ -87,26 +88,21 @@ class LatinoYT :
 
     // ============================ Video Links =============================
     override fun getVideoList(url: String, name: String): List<Video> {
-        Log.d("LatinoYT", "[getVideoList] url=$url name=$name")
         var fixedUrl = url
         if (fixedUrl.contains("ytlinker.online")) {
-            Log.d("LatinoYT", "[getVideoList] ytlinker.online detected, replacing with old.mytsumi.com")
             fixedUrl = fixedUrl.replace("ytlinker.online", "old.mytsumi.com")
         }
 
         val loweredUrl = fixedUrl.lowercase()
         if (loweredUrl.contains("animed23") || loweredUrl.contains("mytsumi") || loweredUrl.contains("ytlinker")) {
             if (loweredUrl.contains("server=multi") || loweredUrl.contains("/multiplayer/")) {
-                Log.d("LatinoYT", "[getVideoList] -> mytsumi multi-server URL, calling extractFromMytsumi")
                 return extractFromMytsumi(fixedUrl)
             }
             if (loweredUrl.contains("/players/") || loweredUrl.contains("options.php")) {
-                Log.d("LatinoYT", "[getVideoList] -> mytsumi players/options URL, calling extractFromPlayers")
                 return extractFromPlayers(fixedUrl, name)
             }
         }
 
-        Log.d("LatinoYT", "[getVideoList] -> routing to extractor based on URL: $fixedUrl")
         val lowercaseUrl = fixedUrl.lowercase()
         val lowercaseName = name.lowercase()
         return runCatching {
@@ -127,6 +123,14 @@ class LatinoYT :
                     streamtapeExtractor.videosFromUrl(fixedUrl)
                 lowercaseUrl.contains("ok.ru") || lowercaseUrl.contains("okru") ->
                     okruExtractor.videosFromUrl(fixedUrl)
+                lowercaseUrl.contains("yourupload") -> {
+                    val yourUploadHeaders = headers.newBuilder()
+                        .set("Referer", "https://www.yourupload.com/")
+                        .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+                        .build()
+                    val videos = yourUploadExtractor.videoFromUrl(fixedUrl, yourUploadHeaders, "YourUpload", "YourUpload - ")
+                    videos.map { it.copy(headers = yourUploadHeaders) }
+                }
                 else ->
                     universalExtractor.videosFromUrl(fixedUrl, headers)
             }
@@ -134,119 +138,61 @@ class LatinoYT :
     }
 
     /**
-     * Extract videos from a mytsumi-style multi-server URL.
+     * Extracts videos from mytsumi-style multi-server URLs.
      *
-     * There are two formats:
-     * - Old mytsumi: mytsumi.com/multiplayer/options.php?server=multi&value=<id>&bg=...
-     *   Returns a page with direct videoTabs JSON.
-     * - New animed23: animed23.online/opciones/options.php?server=multi&value=<base64>&bg=...
-     *   Returns splash page -> player.php?data=... -> contenedor.php?id=...
+     * Supports two formats:
+     * - Old mytsumi: `mytsumi.com/multiplayer/options.php?server=multi&value=<id>&bg=...`
+     *   Returns a page with a direct `videoTabs` JSON.
+     * - New animed23: `animed23.online/opciones/options.php?server=multi&value=<base64>&bg=...`
+     *   Requires navigating through splash page -> player.php?data=... -> contenedor.php?id=...
      */
     private fun extractFromMytsumi(url: String): List<Video> {
-        Log.d("LatinoYT", "[extractFromMytsumi] url=$url")
         val urlObj = url.toHttpUrlOrNull() ?: return emptyList()
         val host = urlObj.host
+        val contenedorHeaders = headers.newBuilder().set("Referer", "https://$host/").build()
 
-        val contenedorHeaders = headers.newBuilder()
-            .set("Referer", "https://$host/")
-            .build()
-
-        // Case 1: Old mytsumi format: options.php?server=multi&value=<id>
-        // The URL itself contains the videoTabs JSON directly
-        if (host.contains("mytsumi") && url.contains("options.php")) {
-            Log.d("LatinoYT", "[extractFromMytsumi] old mytsumi format, using URL directly")
-            val html = runCatching {
-                client.newCall(GET(url, contenedorHeaders)).execute().body.string()
-            }.getOrElse { return emptyList() }
-
-            // Direct videoTabs JSON in the response
-            val directMatch = VIDEO_TABS_REGEX.find(html) ?: VIDEO_TABS_REGEX_NO_SEMICOLON.find(html)
+        if (host.contains("animed23")) {
+            val optionsHtml = runCatching { client.newCall(GET(url, contenedorHeaders)).execute().body.string() }.getOrElse { return emptyList() }
+            val directMatch = VIDEO_TABS_REGEX.find(optionsHtml) ?: VIDEO_TABS_REGEX_NO_SEMICOLON.find(optionsHtml)
             if (directMatch != null) {
                 val jsonArray = runCatching { JSONArray(directMatch.groupValues[1]) }.getOrNull()
-                if (jsonArray != null) {
-                    Log.d("LatinoYT", "[extractFromMytsumi] found direct videoTabs: ${jsonArray.length()} servers")
-                    return processVideoTabs(jsonArray)
+                if (jsonArray != null) return processVideoTabs(jsonArray)
+            }
+            val playerUrl = PLAYER_URL_REGEX.find(optionsHtml)?.groupValues?.get(1) ?: return emptyList()
+            val fixedPlayerUrl = when {
+                playerUrl.startsWith("//") -> "https:$playerUrl"
+                playerUrl.startsWith("/") -> "https://$host$playerUrl"
+                else -> playerUrl
+            }
+            val playerHtml = runCatching { client.newCall(GET(fixedPlayerUrl, contenedorHeaders)).execute().body.string() }.getOrElse { return emptyList() }
+            val containerIds = CONTAINER_ID_REGEX.findAll(playerHtml).map { it.groupValues[1] }.toList()
+            val videos = mutableListOf<Video>()
+            for (id in containerIds) {
+                val cUrl = "https://$host/multiplayer/contenedor.php?id=$id"
+                val cHtml = runCatching { client.newCall(GET(cUrl, contenedorHeaders)).execute().body.string() }.getOrElse { continue }
+                if (cHtml.contains("Contenedor no encontrado")) continue
+                val tabMatch = VIDEO_TABS_REGEX.find(cHtml) ?: VIDEO_TABS_REGEX_NO_SEMICOLON.find(cHtml)
+                if (tabMatch != null) {
+                    val jsonArray = runCatching { JSONArray(tabMatch.groupValues[1]) }.getOrNull()
+                    if (jsonArray != null) videos.addAll(processVideoTabs(jsonArray))
                 }
             }
-            Log.d("LatinoYT", "[extractFromMytsumi] no direct videoTabs, first 2000 chars: ${html.take(2000)}")
-            return emptyList()
+            return videos
         }
 
-        // Case 2: Old mytsumi with /multiplayer/ path
-        val valueParam = urlObj.queryParameter("value") ?: run {
-            Log.e("LatinoYT", "[extractFromMytsumi] no 'value' query param found")
-            return emptyList()
-        }
-
-        val contenedorHtml = runCatching {
-            client.newCall(
-                GET("https://$host/multiplayer/contenedor.php?id=$valueParam", contenedorHeaders),
-            ).execute().body.string()
-        }.getOrElse { return emptyList() }
-
-        // Check for old-style direct videoTabs
-        val oldMatch = VIDEO_TABS_REGEX.find(contenedorHtml)
-            ?: VIDEO_TABS_REGEX_NO_SEMICOLON.find(contenedorHtml)
+        val valueParam = urlObj.queryParameter("value") ?: return emptyList()
+        val contenedorHtml = runCatching { client.newCall(GET("https://$host/multiplayer/contenedor.php?id=$valueParam", contenedorHeaders)).execute().body.string() }.getOrElse { return emptyList() }
+        val oldMatch = VIDEO_TABS_REGEX.find(contenedorHtml) ?: VIDEO_TABS_REGEX_NO_SEMICOLON.find(contenedorHtml)
         if (oldMatch != null) {
             val jsonArray = runCatching { JSONArray(oldMatch.groupValues[1]) }.getOrNull()
-            if (jsonArray != null) {
-                Log.d("LatinoYT", "[extractFromMytsumi] old-style contenedor with videoTabs: ${jsonArray.length()} servers")
-                return processVideoTabs(jsonArray)
-            }
+            if (jsonArray != null) return processVideoTabs(jsonArray)
         }
-
-        // Case 3: animed23.online new format with splash -> player -> contenedor
-        Log.d("LatinoYT", "[extractFromMytsumi] new animed23 format, looking for player URL")
-        Log.d("LatinoYT", "[extractFromMytsumi] contenedor first 2000 chars: ${contenedorHtml.take(2000)}")
-
-        // Extract player.php URL from the splash page JavaScript
-        val playerUrl = PLAYER_URL_REGEX.find(contenedorHtml)?.groupValues?.get(1) ?: run {
-            Log.e("LatinoYT", "[extractFromMytsumi] could not find player URL in HTML")
-            return emptyList()
-        }
-
-        if (playerUrl == "about:blank" || playerUrl.isBlank()) {
-            Log.e("LatinoYT", "[extractFromMytsumi] player URL is blank/about:blank, cannot proceed")
-            return emptyList()
-        }
-
-        val fixedPlayerUrl = when {
-            playerUrl.startsWith("//") -> "https:$playerUrl"
-            playerUrl.startsWith("/") -> "https://$host$playerUrl"
-            else -> playerUrl
-        }
-
-        Log.d("LatinoYT", "[extractFromMytsumi] player URL: $fixedPlayerUrl")
-
-        val playerHtml = runCatching {
-            client.newCall(GET(fixedPlayerUrl, contenedorHeaders)).execute().body.string()
-        }.getOrElse { return emptyList() }
-
-        Log.d("LatinoYT", "[extractFromMytsumi] player response length=${playerHtml.length}")
-
-        val containerIds = CONTAINER_ID_REGEX.findAll(playerHtml).map { it.groupValues[1] }.toList()
-        Log.d("LatinoYT", "[extractFromMytsumi] container IDs: $containerIds")
-
-        val videos = mutableListOf<Video>()
-        for (id in containerIds) {
-            val cUrl = "https://$host/multiplayer/contenedor.php?id=$id"
-            val cHtml = runCatching {
-                client.newCall(GET(cUrl, contenedorHeaders)).execute().body.string()
-            }.getOrElse { continue }
-
-            val tabMatch = VIDEO_TABS_REGEX.find(cHtml) ?: VIDEO_TABS_REGEX_NO_SEMICOLON.find(cHtml)
-            if (tabMatch != null) {
-                val jsonArray = runCatching { JSONArray(tabMatch.groupValues[1]) }.getOrNull()
-                if (jsonArray != null) {
-                    videos.addAll(processVideoTabs(jsonArray))
-                }
-            }
-        }
-
-        Log.d("LatinoYT", "[extractFromMytsumi] total videos: ${videos.size}")
-        return videos
+        return emptyList()
     }
 
+    /**
+     * Processes the JSON array of video tabs and extracts videos from each tab.
+     */
     private fun processVideoTabs(jsonArray: JSONArray): List<Video> {
         val videos = mutableListOf<Video>()
         for (i in 0 until jsonArray.length()) {
@@ -261,8 +207,10 @@ class LatinoYT :
         return videos
     }
 
+    /**
+     * Extracts videos from a mytsumi players URL.
+     */
     private fun extractFromPlayers(url: String, name: String): List<Video> {
-        Log.d("LatinoYT", "[extractFromPlayers] url=$url name=$name")
         val host = url.toHttpUrlOrNull()?.host ?: "old.mytsumi.com"
         val contenedorHeaders = headers.newBuilder()
             .set("Referer", "https://$host/")
@@ -272,14 +220,11 @@ class LatinoYT :
             client.newCall(GET(url, contenedorHeaders)).execute().asJsoup()
         }.getOrNull() ?: return emptyList()
 
-        Log.d("LatinoYT", "[extractFromPlayers] page title=${doc.title()}")
-
         val resolvedUrl = doc.selectFirst("div.play a")?.attr("href")
             ?: doc.selectFirst("a[href*=http]")?.attr("href")
             ?: doc.selectFirst("a[href^=/]")?.attr("abs:href")
             ?: return emptyList()
 
-        Log.d("LatinoYT", "[extractFromPlayers] resolvedUrl=$resolvedUrl")
         return getVideoList(resolvedUrl, name)
     }
 
@@ -319,6 +264,7 @@ class LatinoYT :
         return runCatching { super.episodeListParse(response) }.getOrElse { emptyList() }
     }
 
+    // ============================== Preferences ===============================
     override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val server = preferences.getString(PREF_SERVER_KEY, PREF_SERVER_DEFAULT)!!
@@ -364,6 +310,7 @@ class LatinoYT :
     }
 }
 
+// ============================== Regex ===============================
 // Regex to extract the player.php iframe URL from the splash page JavaScript
 private val PLAYER_URL_REGEX = Regex(
     """iframe\.src\s*=\s*['"]([^'"]+)['"]""",
